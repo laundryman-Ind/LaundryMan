@@ -1,0 +1,32 @@
+# ---------- Dependencies & build output ----------
+node_modules/
+dist/
+
+# ---------- Secrets — never commit real keys ----------
+.env
+.env.local
+.env.*.local
+
+# ---------- Freebuff app session data ----------
+.freebuff/
+
+# ---------- Android build artifacts ----------
+android/.gradle/
+android/build/
+android/app/build/
+android/capacitor-cordova-android-plugins/build/
+android/local.properties
+android/.idea/
+android/captures/
+android/app/release/
+*.keystore
+*.jks
+
+# ---------- Logs ----------
+*.log
+
+# ---------- Local version snapshot (duplicate of this repo) ----------
+VERSION_CONTROL/V1/
+
+# ---------- Dev test artifacts ----------
+resize-*.png
