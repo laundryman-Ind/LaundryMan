@@ -1,14 +1,26 @@
 import React, { useRef, useState } from 'react'
 import Icon from '../components/Icon'
 import { formatPhoneLocal } from '../services/phone'
+import { supabase, isSupabaseConfigured, toPhone } from '../services/supabase'
 
 const Login = ({ notify, onSuccess }) => {
   const [num, setNum] = useState('')
+  const [sending, setSending] = useState(false)
   const inputRef = useRef(null)
 
-  const submit = () => {
-    if (num.replace(/\D/g, '').length === 10) onSuccess(num)
-    else notify('Enter a valid mobile number')
+  const submit = async () => {
+    if (num.replace(/\D/g, '').length !== 10) return notify('Enter a valid mobile number')
+    if (!isSupabaseConfigured) return onSuccess(num)
+
+    setSending(true)
+    const { error } = await supabase.auth.signInWithOtp({
+      phone: toPhone(num),
+      // Default channel is 'sms'. If your Supabase project has no SMS
+      // provider linked, this returns an error we surface below.
+    })
+    setSending(false)
+    if (error) return notify(error.message)
+    onSuccess(num)
   }
 
   return (
@@ -37,13 +49,14 @@ const Login = ({ notify, onSuccess }) => {
             inputMode="numeric"
             placeholder="Enter mobile number"
             value={num}
+            disabled={sending}
             onChange={(e) => setNum(formatPhoneLocal(e.target.value))}
             onKeyDown={(e) => { if (e.key === 'Enter') submit() }}
           />
         </div>
 
-        <button className="lg-continue" onClick={submit}>
-          Continue
+        <button className="lg-continue" onClick={submit} disabled={sending}>
+          {sending ? 'Sending code…' : 'Continue'}
         </button>
 
         <p className="lg-terms">

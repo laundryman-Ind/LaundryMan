@@ -8,6 +8,8 @@ import Login from './pages/Login'
 import Otp from './pages/Otp'
 import Name from './pages/Name'
 import { formatPhone } from './services/phone'
+import { upsertProfile, currentUser, getProfile } from './services/api'
+import { isSupabaseConfigured } from './services/supabase'
 import Home from './pages/Home'
 import Search from './pages/Search'
 import Services from './pages/Services'
@@ -36,6 +38,7 @@ const AppContent = () => {
   const [toast, setToast] = useState('')
   const [authStep, setAuthStep] = useState('login') // 'login' | 'otp' | 'name'
   const [authNum, setAuthNum] = useState('')
+  const [authChecked, setAuthChecked] = useState(false)
   const [keyboardOpen, setKeyboardOpen] = useState(false)
   const pageRefreshRef = useRef(null)
 
@@ -121,15 +124,75 @@ const AppContent = () => {
     return 'BACK'
   }
 
+  // On load: restore the session from Supabase. If the authenticated user
+  // already has a profile, load it and go straight to Home (never ask for the
+  // name again). If there's a session but no profile yet, ask for the name.
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      try {
+        if (isSupabaseConfigured) {
+          const supUser = await currentUser()
+          if (supUser && !cancelled) {
+            let profile = null
+            try { profile = await getProfile() } catch { profile = null }
+            if (profile) {
+              updateUser({
+                name: profile.name || '',
+                photo: profile.photo || null,
+                phone: profile.phone ? formatPhone(profile.phone) : formatPhone(supUser.phone || ''),
+              })
+              login()
+              setScreen('home')
+            } else {
+              // Session exists but no profile row — incomplete signup.
+              setAuthNum(supUser.phone || '')
+              setAuthStep('name')
+            }
+          }
+        }
+      } finally {
+        if (!cancelled) setAuthChecked(true)
+      }
+    })()
+    return () => { cancelled = true }
+  }, [])
+
   const handleLogin = () => {
     login()
     setAuthStep('login')
     navigate('home')
   }
 
-  const handleNameDone = (name) => {
+  // After OTP verification the Supabase session exists. If the authenticated
+  // user already has a profile, skip the name step and go to Home with their
+  // existing data. Otherwise ask for the name (new user).
+  const handleOtpVerified = async () => {
+    let profile = null
+    try { profile = await getProfile() } catch { profile = null }
+    if (profile) {
+      updateUser({
+        name: profile.name || '',
+        photo: profile.photo || null,
+        phone: profile.phone ? formatPhone(profile.phone) : formatPhone(authNum),
+      })
+      handleLogin()
+    } else {
+      setAuthStep('name')
+    }
+  }
+
+  const handleNameDone = async (name) => {
     updateUser({ name, phone: formatPhone(authNum) })
     handleLogin()
+    // Create the real profile row in the database, keyed by auth.uid()
+    // (best effort — a missing table or offline state surfaces as a toast,
+    // the app keeps working). Phone comes from the Supabase session.
+    try {
+      await upsertProfile({ name })
+    } catch (e) {
+      notify(e.message)
+    }
   }
 
   const render = () => {
@@ -151,6 +214,9 @@ const AppContent = () => {
     }
   }
 
+  // Don't flash the login screen while the Supabase session is being checked.
+  if (!authChecked) return <div className="app" />
+
   return (
     <div
       className={`${showLogin ? 'app app-login' : 'app'}${keyboardOpen ? ' keyboard-open' : ''}`}
@@ -160,7 +226,7 @@ const AppContent = () => {
           <Otp
             num={authNum}
             notify={notify}
-            onVerify={() => setAuthStep('name')}
+            onVerify={handleOtpVerified}
             onBack={() => setAuthStep('login')}
           />
         ) : authStep === 'name' ? (

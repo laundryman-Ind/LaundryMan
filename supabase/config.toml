@@ -1,0 +1,3 @@
+# Supabase CLI project config — used to deploy Edge Functions.
+# The real project id is set when linking (supabase link --project-ref <ref>).
+project_id = "laundryman"

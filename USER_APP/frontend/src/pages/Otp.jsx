@@ -1,8 +1,10 @@
 import React, { useEffect, useRef, useState } from 'react'
+import { supabase, isSupabaseConfigured, toPhone } from '../services/supabase'
 
 const Otp = ({ num, notify, onVerify, onBack }) => {
   const [digits, setDigits] = useState(Array(6).fill(''))
   const [count, setCount] = useState(30)
+  const [busy, setBusy] = useState(false)
   const refs = useRef([])
 
   // Focus the first box on open + resend countdown
@@ -12,6 +14,23 @@ const Otp = ({ num, notify, onVerify, onBack }) => {
     const t = setTimeout(() => setCount((c) => c - 1), 1000)
     return () => clearTimeout(t)
   }, [count])
+
+  // Real OTP verification via Supabase. Falls back to the old demo
+  // behavior (any 6 digits pass) when Supabase isn't configured.
+  const verify = async (code) => {
+    if (code.length < 6) return notify('Enter the 6-digit code')
+    if (!isSupabaseConfigured) return onVerify()
+
+    setBusy(true)
+    const { error } = await supabase.auth.verifyOtp({
+      phone: toPhone(num),
+      token: code,
+      type: 'sms',
+    })
+    setBusy(false)
+    if (error) return notify(error.message)
+    onVerify()
+  }
 
   const setDigit = (i, val) => {
     const clean = val.replace(/\D/g, '')
@@ -26,20 +45,25 @@ const Otp = ({ num, notify, onVerify, onBack }) => {
       if (clean && i < 5) refs.current[i + 1]?.focus()
     }
     setDigits(next)
-    if (next.every((d) => d !== '')) onVerify(next.join(''))
+    if (next.every((d) => d !== '')) verify(next.join(''))
   }
 
   const onKey = (i, e) => {
     if (e.key === 'Backspace' && !digits[i] && i > 0) refs.current[i - 1]?.focus()
   }
 
-  const verify = () => {
-    if (digits.join('').length < 6) return notify('Enter the 6-digit code')
-    onVerify(digits.join(''))
-  }
-
-  const resend = () => {
+  const resend = async () => {
     if (count > 0) return notify(`Resend in ${count}s`)
+    if (!isSupabaseConfigured) {
+      setCount(30)
+      setDigits(Array(6).fill(''))
+      notify('Code resent')
+      return
+    }
+    setBusy(true)
+    const { error } = await supabase.auth.signInWithOtp({ phone: toE164(num) })
+    setBusy(false)
+    if (error) return notify(error.message)
     setCount(30)
     setDigits(Array(6).fill(''))
     notify('Code resent')
@@ -67,6 +91,7 @@ const Otp = ({ num, notify, onVerify, onBack }) => {
               type="tel"
               inputMode="numeric"
               maxLength={1}
+              disabled={busy}
               value={d}
               onChange={(e) => setDigit(i, e.target.value)}
               onKeyDown={(e) => onKey(i, e)}
@@ -86,7 +111,9 @@ const Otp = ({ num, notify, onVerify, onBack }) => {
           </a>
         </p>
 
-        <button className="lg-continue" onClick={verify}>Verify</button>
+        <button className="lg-continue" onClick={() => verify(digits.join(''))} disabled={busy}>
+          {busy ? 'Verifying…' : 'Verify'}
+        </button>
 
         <p className="otp-back">
           <a href="#change" onClick={(e) => { e.preventDefault(); onBack() }}>Use a different number</a>

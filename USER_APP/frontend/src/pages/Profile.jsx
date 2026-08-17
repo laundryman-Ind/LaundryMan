@@ -3,6 +3,7 @@ import { useApp } from '../context/AppContext'
 import { readImageRaw } from '../services/image'
 import { useActivityStats } from '../hooks/useActivityStats'
 import { formatPhone } from '../services/phone'
+import { toPhone } from '../services/supabase'
 import Icon from '../components/Icon'
 import Photo from '../components/Photo'
 import PageHeader from '../components/PageHeader'
@@ -10,12 +11,14 @@ import SectionLabel from '../components/SectionLabel'
 import Modal from '../components/Modal'
 import ImageCrop from '../components/ImageCrop'
 import { useScrollLock, useSwipeDismiss } from '../utils/popup'
+import { upsertProfile, deleteAccount as deleteAccountApi, isBackendReady } from '../services/api'
 
 const Profile = ({ navigate, notify }) => {
   const { user, payMethod, payMethods, updateUser, signout, orders, clearOrders } = useApp()
   const stats = useActivityStats()
   const [confirmOut, setConfirmOut] = useState(false)
   const [confirmClear, setConfirmClear] = useState(false)
+  const [confirmDelete, setConfirmDelete] = useState(false)
   const [editOpen, setEditOpen] = useState(false)
   const [busy, setBusy] = useState(false)
   const [cropSrc, setCropSrc] = useState(null)
@@ -31,6 +34,26 @@ const Profile = ({ navigate, notify }) => {
     signout()
     setConfirmOut(false)
     notify('Signed out')
+    navigate('home')
+  }
+
+  // Permanently delete the Supabase account (delete_own_account RPC, which
+  // cascades to the profile row), then wipe local data and sign out. If the
+  // DB call fails (e.g. the function isn't deployed yet) the app still signs
+  // out locally and surfaces the reason.
+  const handleDeleteAccount = async () => {
+    setConfirmDelete(false)
+    setEditOpen(false)
+    let failed = null
+    try {
+      await deleteAccountApi()
+    } catch (e) {
+      failed = e.message
+    }
+    signout()
+    localStorage.clear()
+    if (failed) notify(failed)
+    else notify('Account deleted')
     navigate('home')
   }
 
@@ -59,12 +82,23 @@ const Profile = ({ navigate, notify }) => {
     notify('Photo added')
   }
 
-  const saveProfile = () => {
+  const saveProfile = async () => {
     if (!form.name.trim()) return notify('Name is required')
     if (form.phone.replace(/\D/g, '').length < 10) return notify('Enter a valid 10-digit mobile number')
     updateUser({ name: form.name.trim(), phone: formatPhone(form.phone), photo: form.photo || null })
     setEditOpen(false)
     notify('Profile updated')
+    // Persist to the database (best effort — errors surface as a toast).
+    // The row stays keyed by auth.uid(); the phone column is saved as data.
+    try {
+      await upsertProfile({
+        phone: toPhone(form.phone),
+        name: form.name.trim(),
+        photo: form.photo || null,
+      })
+    } catch (e) {
+      notify(e.message)
+    }
   }
 
   const menu = [
@@ -155,7 +189,11 @@ const Profile = ({ navigate, notify }) => {
       <button className="btn btn-ghost" onClick={() => setConfirmOut(true)}>
         <Icon name="power" style={{ width: 16, height: 16 }} /> Sign out
       </button>
-      <p className="note">This is a static preview — your data never leaves this browser.</p>
+      <p className="note">
+        {isBackendReady
+          ? 'Your profile is stored securely in the database.'
+          : 'This is a static preview — your data never leaves this browser.'}
+      </p>
 
       <Modal
         open={confirmOut}
@@ -258,9 +296,28 @@ const Profile = ({ navigate, notify }) => {
               <button className="btn btn-ghost" onClick={() => setEditOpen(false)}>Cancel</button>
               <button className="btn btn-ink" onClick={saveProfile}>Save changes</button>
             </div>
+
+            <button
+              className="btn btn-danger"
+              style={{ marginTop: 12, width: '100%' }}
+              onClick={() => setConfirmDelete(true)}
+            >
+              <Icon name="trash" style={{ width: 16, height: 16 }} /> Delete account
+            </button>
           </div>
         </div>
       )}
+
+      {/* DELETE ACCOUNT — deletes the Supabase auth account + profile row, then wipes this device */}
+      <Modal
+        open={confirmDelete}
+        title="Delete account?"
+        text="This permanently deletes your Laundry Man account from the database — including your auth account and profile. It can't be undone."
+        confirmLabel="Delete account"
+        danger
+        onConfirm={handleDeleteAccount}
+        onClose={() => setConfirmDelete(false)}
+      />
 
       {/* 1:1 CROP SHEET — shown before a new photo is applied */}
       {cropSrc && (

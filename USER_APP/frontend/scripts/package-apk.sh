@@ -26,7 +26,7 @@ if [ -z "${JAVA_HOME:-}" ] || [ ! -d "$JAVA_HOME" ]; then
 fi
 echo "Using JDK: $JAVA_HOME"
 
-OUT="../../APK_BUILD/LaundryMan-beta0.12.apk"
+OUT="../../APK_BUILD/LaundryMan-beta0.13.apk"
 
 echo "── 1/6 web build"
 npm run build

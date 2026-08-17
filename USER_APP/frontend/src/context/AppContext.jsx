@@ -1,5 +1,15 @@
 import React, { createContext, useContext, useState, useEffect, useMemo, useCallback } from 'react'
 import { ITEM_INDEX, USER, IMG, RIDERS, ACTIVE_STATUSES, STATUS_LABELS, STATUS_NOTES } from '../data/mockData'
+import { supabase, isSupabaseConfigured } from '../services/supabase'
+import {
+  currentUser,
+  listAddresses,
+  upsertAddress,
+  removeAddress as removeAddressApi,
+  listOrders,
+  upsertOrder,
+  deleteAllOrders,
+} from '../services/api'
 
 const AppContext = createContext()
 
@@ -58,6 +68,42 @@ export const AppProvider = ({ children }) => {
     localStorage.removeItem('lm2_orders_v2')
     return load('lm2_orders_v3', [])
   })
+
+  // When a Supabase session becomes active, load the user's addresses and
+  // orders from the database. If the DB has data it wins (source of truth);
+  // if the DB is empty but this device has local data, migrate it up once.
+  useEffect(() => {
+    if (!authed || !isSupabaseConfigured) return
+    let cancelled = false
+    ;(async () => {
+      try {
+        const u = await currentUser()
+        if (!u || cancelled) return
+        const [dbAddrs, dbOrders] = await Promise.all([listAddresses(), listOrders()])
+        if (cancelled) return
+
+        const localAddrs = load('lm2_addresses_v2', [])
+        if (dbAddrs.length > 0) {
+          setAddresses(dbAddrs)
+        } else if (localAddrs.length > 0) {
+          await Promise.all(localAddrs.map((a) => upsertAddress(a).catch(() => {})))
+          setAddresses(localAddrs)
+        }
+
+        const localOrders = load('lm2_orders_v3', [])
+        if (dbOrders.length > 0) {
+          setOrders(dbOrders)
+        } else if (localOrders.length > 0) {
+          await Promise.all(localOrders.map((o) => upsertOrder(o).catch(() => {})))
+          setOrders(localOrders)
+        }
+      } catch (e) {
+        console.warn('DB sync failed', e)
+      }
+    })()
+    return () => { cancelled = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authed])
 
   useEffect(() => save('lm2_user', user), [user])
   useEffect(() => save('lm2_cart', cart), [cart])
@@ -124,16 +170,21 @@ export const AppProvider = ({ children }) => {
     const full = { id: 'a' + Date.now().toString(36), ...addr }
     setAddresses((prev) => [...prev, full])
     setSelectedAddressId(full.id)
+    upsertAddress(full).catch((e) => console.warn('address save failed', e))
     return full
   }
 
   const updateAddress = (id, patch) => {
-    setAddresses((prev) => prev.map((a) => (a.id === id ? { ...a, ...patch } : a)))
+    const next = addresses.map((a) => (a.id === id ? { ...a, ...patch } : a))
+    setAddresses(next)
+    const updated = next.find((a) => a.id === id)
+    if (updated) upsertAddress(updated).catch((e) => console.warn('address save failed', e))
   }
 
   const removeAddress = (id) => {
     setAddresses((prev) => prev.filter((a) => a.id !== id))
     setSelectedAddressId((prev) => (prev === id ? '' : prev))
+    removeAddressApi(id).catch((e) => console.warn('address delete failed', e))
   }
 
   const placeOrder = ({ items, total, address, payment }) => {
@@ -165,30 +216,38 @@ export const AppProvider = ({ children }) => {
     setOrders((prev) => [order, ...prev])
     clearCart()
     setItemPhotos({})
+    upsertOrder(order).catch((e) => console.warn('order save failed', e))
     return order
   }
 
   // Wipe this account's order history only — everything else is kept.
-  const clearOrders = () => setOrders([])
+  const clearOrders = () => {
+    setOrders([])
+    deleteAllOrders().catch((e) => console.warn('orders clear failed', e))
+  }
 
   const cancelOrder = (id) => {
-    setOrders((prev) =>
-      prev.map((o) =>
-        o.id === id
-          ? {
-              ...o,
-              statusKey: 'cancelled',
-              statusLabel: 'Cancelled',
-              eta: '—',
-              timeline: [...(o.timeline || []), { step: 'cancelled', time: 'Just now', note: 'Order cancelled' }],
-            }
-          : o
-      )
+    const next = orders.map((o) =>
+      o.id === id
+        ? {
+            ...o,
+            statusKey: 'cancelled',
+            statusLabel: 'Cancelled',
+            eta: '—',
+            timeline: [...(o.timeline || []), { step: 'cancelled', time: 'Just now', note: 'Order cancelled' }],
+          }
+        : o
     )
+    setOrders(next)
+    const changed = next.find((o) => o.id === id)
+    if (changed) upsertOrder(changed).catch((e) => console.warn('order save failed', e))
   }
 
   const rateOrder = (id, rating, comment) => {
-    setOrders((prev) => prev.map((o) => (o.id === id ? { ...o, review: { rating, comment } } : o)))
+    const next = orders.map((o) => (o.id === id ? { ...o, review: { rating, comment } } : o))
+    setOrders(next)
+    const changed = next.find((o) => o.id === id)
+    if (changed) upsertOrder(changed).catch((e) => console.warn('order save failed', e))
   }
 
   // Re-add an order's items to the bag. Returns number of items added (0 = nothing matched).
@@ -230,6 +289,7 @@ export const AppProvider = ({ children }) => {
       timeline: [...(o.timeline || []), { step: nextKey, time: 'Just now', note: STATUS_NOTES[nextKey] }],
     }
     setOrders((prev) => prev.map((x) => (x.id === o.id ? next : x)))
+    upsertOrder(next).catch((e) => console.warn('order save failed', e))
     return nextLabel
   }, [orders])
 
@@ -277,6 +337,8 @@ export const AppProvider = ({ children }) => {
     setCart({})
     setItemPhotos({})
     setPayMethod('cod')
+    // End the real Supabase session too (no-op when unconfigured)
+    if (supabase) supabase.auth.signOut()
   }
 
   const value = {
