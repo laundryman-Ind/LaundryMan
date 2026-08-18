@@ -189,3 +189,39 @@ export const deleteAllOrders = async () => {
   if (error) throw new Error(hint(error))
   return true
 }
+
+// ---------------------------------------------------------------------------
+// CATALOG — public services + coupons (no auth needed; RLS allows anon reads).
+// ---------------------------------------------------------------------------
+
+// Services with their priced items, in display order.
+export const listServices = async () => {
+  if (!isSupabaseConfigured) return null
+  const { data, error } = await supabase
+    .from('services')
+    .select('id, name, sub, icon, span, photo, tone, flat, price, sort, service_items(id, name, icon, price, unit, sort)')
+    .eq('active', true)
+    .order('sort')
+  if (error) throw new Error(hint(error))
+  return (data || []).map((r) => ({
+    id: r.id,
+    name: r.name,
+    sub: r.sub,
+    icon: r.icon,
+    span: r.span,
+    photo: r.photo,
+    tone: r.tone,
+    flat: r.flat,
+    price: r.price,
+    items: (r.service_items || [])
+      .slice()
+      .sort((a, b) => a.sort - b.sort)
+      .map((it) => ({
+        id: it.id,
+        name: it.name,
+        icon: it.icon,
+        price: Number(it.price),
+        unit: it.unit,
+      })),
+  }))
+}

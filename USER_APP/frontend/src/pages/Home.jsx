@@ -1,6 +1,6 @@
 import React from 'react'
 import { useApp } from '../context/AppContext'
-import { SERVICES, OFFERS, IMG } from '../data/mockData'
+import { OFFERS, IMG } from '../data/mockData'
 import Icon from '../components/Icon'
 import Photo from '../components/Photo'
 import Header from '../components/Header'
@@ -15,6 +15,7 @@ import ActiveOrderCard from '../components/ActiveOrderCard'
 const HOME_SERVICES = ['wash-fold', 'bags', 'wash-iron', 'iron-only', 'dry-clean', 'premium', 'shoes']
 
 const Home = ({ navigate, notify }) => {
+  const { services } = useApp()
   const { activeOrder, addresses, selectedAddressId, user } = useApp()
   const stats = useActivityStats()
 
@@ -94,7 +95,7 @@ const Home = ({ navigate, notify }) => {
       <SectionLabel title="Services" actionLabel="View all" onAction={() => { notify('All services'); goServices() }} />
       <div className="bento bento-3">
         {HOME_SERVICES.map((id) => {
-          const s = SERVICES.find((x) => x.id === id)
+          const s = services.find((x) => x.id === id)
           if (!s) return null
           // Bags is span-2 in the catalog — render it narrow (span-1) so it fits the corner slot.
           const service = id === 'bags' ? { ...s, span: 'span-1' } : s

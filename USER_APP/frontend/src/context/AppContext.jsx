@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, useMemo, useCallback } from 'react'
-import { ITEM_INDEX, USER, IMG, RIDERS, ACTIVE_STATUSES, STATUS_LABELS, STATUS_NOTES } from '../data/mockData'
-import { supabase, isSupabaseConfigured } from '../services/supabase'
+import { SERVICES as MOCK_SERVICES, SERVICE_ITEMS as MOCK_SERVICE_ITEMS, ITEM_INDEX, USER, IMG, RIDERS, ACTIVE_STATUSES, STATUS_LABELS, STATUS_NOTES } from '../data/mockData'
+import { supabase, isSupabaseConfigured, isBetaAuth } from '../services/supabase'
+import { createBetaSession, setBetaProfileName } from '../services/betaAuth'
 import {
   currentUser,
   listAddresses,
@@ -9,6 +10,7 @@ import {
   listOrders,
   upsertOrder,
   deleteAllOrders,
+  listServices,
 } from '../services/api'
 
 const AppContext = createContext()
@@ -69,14 +71,46 @@ export const AppProvider = ({ children }) => {
     return load('lm2_orders_v3', [])
   })
 
+  // Catalog — services (with their priced items). Seeded from the bundled
+  // mock so the app works offline; the database version replaces it when
+  // Supabase is set up (see the catalog effect below).
+  const [services, setServices] = useState(() =>
+    MOCK_SERVICES.map((s) => ({ ...s, items: MOCK_SERVICE_ITEMS[s.id] || [] }))
+  )
+
+  // Load the catalog from the database when Supabase is set up (public reads,
+  // no login needed). Falls back to the bundled mock catalog when the DB
+  // fetch fails or returns empty.
+  useEffect(() => {
+    if (!isSupabaseConfigured) return
+    let cancelled = false
+    ;(async () => {
+      const dbServices = await listServices().catch(() => null)
+      if (cancelled) return
+      if (dbServices && dbServices.length) setServices(dbServices)
+    })()
+    return () => { cancelled = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   // When a Supabase session becomes active, load the user's addresses and
   // orders from the database. If the DB has data it wins (source of truth);
   // if the DB is empty but this device has local data, migrate it up once.
+  // In beta mode, the session is created via anonymous sign-in (betaAuth.js).
   useEffect(() => {
     if (!authed || !isSupabaseConfigured) return
     let cancelled = false
     ;(async () => {
       try {
+        // In beta mode, ensure we have a real Supabase session first.
+        // createBetaSession is idempotent — safe to call on every sync.
+        if (isBetaAuth) {
+          const u = await currentUser()
+          if (!u) {
+            const phone = user?.phone || ''
+            if (phone) await createBetaSession(phone)
+          }
+        }
         const u = await currentUser()
         if (!u || cancelled) return
         const [dbAddrs, dbOrders] = await Promise.all([listAddresses(), listOrders()])
@@ -329,6 +363,11 @@ export const AppProvider = ({ children }) => {
   const login = () => {
     localStorage.setItem('lm2_logged_in', '1')
     setAuthed(true)
+    // In beta mode, create a real Supabase session so DB operations work.
+    if (isBetaAuth && isSupabaseConfigured) {
+      const phone = user?.phone || ''
+      if (phone) createBetaSession(phone).catch(() => {})
+    }
   }
 
   const signout = () => {
@@ -345,6 +384,7 @@ export const AppProvider = ({ children }) => {
     user,
     updateUser,
     reloadFromStorage,
+    services,
     cart,
     cartLines,
     cartTotal,

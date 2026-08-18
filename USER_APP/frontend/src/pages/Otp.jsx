@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react'
-import { supabase, isSupabaseConfigured, toPhone } from '../services/supabase'
+import { supabase, isSupabaseConfigured, isBetaAuth, toPhone } from '../services/supabase'
 
 const Otp = ({ num, notify, onVerify, onBack }) => {
   const [digits, setDigits] = useState(Array(6).fill(''))
@@ -15,10 +15,11 @@ const Otp = ({ num, notify, onVerify, onBack }) => {
     return () => clearTimeout(t)
   }, [count])
 
-  // Real OTP verification via Supabase. Falls back to the old demo
-  // behavior (any 6 digits pass) when Supabase isn't configured.
+  // Beta mode: any 6-digit code passes (no SMS required).
+  // Production mode: real OTP verification via Supabase.
   const verify = async (code) => {
     if (code.length < 6) return notify('Enter the 6-digit code')
+    if (isBetaAuth) return onVerify()
     if (!isSupabaseConfigured) return onVerify()
 
     setBusy(true)
@@ -54,14 +55,14 @@ const Otp = ({ num, notify, onVerify, onBack }) => {
 
   const resend = async () => {
     if (count > 0) return notify(`Resend in ${count}s`)
-    if (!isSupabaseConfigured) {
+    if (isBetaAuth || !isSupabaseConfigured) {
       setCount(30)
       setDigits(Array(6).fill(''))
       notify('Code resent')
       return
     }
     setBusy(true)
-    const { error } = await supabase.auth.signInWithOtp({ phone: toE164(num) })
+    const { error } = await supabase.auth.signInWithOtp({ phone: toPhone(num) })
     setBusy(false)
     if (error) return notify(error.message)
     setCount(30)

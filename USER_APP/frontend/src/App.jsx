@@ -9,7 +9,8 @@ import Otp from './pages/Otp'
 import Name from './pages/Name'
 import { formatPhone } from './services/phone'
 import { upsertProfile, currentUser, getProfile } from './services/api'
-import { isSupabaseConfigured } from './services/supabase'
+import { isSupabaseConfigured, isBetaAuth } from './services/supabase'
+import { createBetaSession, setBetaProfileName } from './services/betaAuth'
 import Home from './pages/Home'
 import Search from './pages/Search'
 import Services from './pages/Services'
@@ -32,7 +33,7 @@ const SCREEN_LABELS = {
 }
 
 const AppContent = () => {
-  const { authed, login, updateUser, reloadFromStorage } = useApp()
+  const { authed, login, updateUser, user, reloadFromStorage } = useApp()
   const [screen, setScreen] = useState('home')
   const [params, setParams] = useState({})
   const [toast, setToast] = useState('')
@@ -132,6 +133,16 @@ const AppContent = () => {
     ;(async () => {
       try {
         if (isSupabaseConfigured) {
+          // In beta mode, ensure we have a session (may have been cleared).
+          if (isBetaAuth) {
+            const supUser = await currentUser()
+            if (!supUser) {
+              const savedPhone = user?.phone?.replace(/\D/g, '') || ''
+              if (savedPhone.length === 10) {
+                await createBetaSession(savedPhone)
+              }
+            }
+          }
           const supUser = await currentUser()
           if (supUser && !cancelled) {
             let profile = null
@@ -168,6 +179,10 @@ const AppContent = () => {
   // user already has a profile, skip the name step and go to Home with their
   // existing data. Otherwise ask for the name (new user).
   const handleOtpVerified = async () => {
+    // In beta mode, create a real Supabase session first (anonymous sign-in).
+    if (isBetaAuth && isSupabaseConfigured) {
+      await createBetaSession(authNum)
+    }
     let profile = null
     try { profile = await getProfile() } catch { profile = null }
     if (profile) {
@@ -189,7 +204,11 @@ const AppContent = () => {
     // (best effort — a missing table or offline state surfaces as a toast,
     // the app keeps working). Phone comes from the Supabase session.
     try {
-      await upsertProfile({ name })
+      if (isBetaAuth) {
+        await setBetaProfileName(name)
+      } else {
+        await upsertProfile({ name })
+      }
     } catch (e) {
       notify(e.message)
     }

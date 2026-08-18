@@ -1,7 +1,7 @@
 import React, { useRef, useState } from 'react'
 import Icon from '../components/Icon'
 import { formatPhoneLocal } from '../services/phone'
-import { supabase, isSupabaseConfigured, toPhone } from '../services/supabase'
+import { supabase, isSupabaseConfigured, isBetaAuth, toPhone } from '../services/supabase'
 
 const Login = ({ notify, onSuccess }) => {
   const [num, setNum] = useState('')
@@ -10,13 +10,13 @@ const Login = ({ notify, onSuccess }) => {
 
   const submit = async () => {
     if (num.replace(/\D/g, '').length !== 10) return notify('Enter a valid mobile number')
+    // Beta mode: skip SMS, go straight to OTP screen (any code works)
+    if (isBetaAuth) return onSuccess(num)
     if (!isSupabaseConfigured) return onSuccess(num)
 
     setSending(true)
     const { error } = await supabase.auth.signInWithOtp({
       phone: toPhone(num),
-      // Default channel is 'sms'. If your Supabase project has no SMS
-      // provider linked, this returns an error we surface below.
     })
     setSending(false)
     if (error) return notify(error.message)

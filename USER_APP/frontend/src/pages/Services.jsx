@@ -1,5 +1,5 @@
 import React from 'react'
-import { SERVICES } from '../data/mockData'
+import { useApp } from '../context/AppContext'
 import PageHeader from '../components/PageHeader'
 import ServiceCard from '../components/ServiceCard'
 
@@ -13,9 +13,10 @@ const SERVICES_ORDER = [
 ]
 
 const Services = ({ navigate }) => {
+  const { services } = useApp()
   // Everything renders narrow (span-1) except the two wide flagship cards.
   const ordered = SERVICES_ORDER
-    .map((id) => SERVICES.find((s) => s.id === id))
+    .map((id) => services.find((s) => s.id === id))
     .filter(Boolean)
     .map((s) =>
       s.id === 'wash-fold' || s.id === 'wash-iron' ? s : { ...s, span: 'span-1' }

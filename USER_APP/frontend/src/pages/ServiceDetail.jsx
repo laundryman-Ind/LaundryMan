@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react'
 import { useApp } from '../context/AppContext'
-import { SERVICES, SERVICE_ITEMS, formatPrice } from '../data/mockData'
+import { formatPrice } from '../data/mockData'
 import Icon from '../components/Icon'
 import Photo from '../components/Photo'
 import PageHeader from '../components/PageHeader'
@@ -8,9 +8,9 @@ import Stepper from '../components/Stepper'
 import PhotoAttach from '../components/PhotoAttach'
 
 const ServiceDetail = ({ navigate, params, notify }) => {
-  const { cart, setQty, itemPhotos } = useApp()
-  const service = SERVICES.find((s) => s.id === params?.serviceId) || SERVICES[0]
-  const items = SERVICE_ITEMS[service.id] || []
+  const { cart, setQty, itemPhotos, services } = useApp()
+  const service = services.find((s) => s.id === params?.serviceId) || services[0]
+  const items = service?.items || []
 
   const [localQty, setLocalQty] = useState({})
   useEffect(() => {
