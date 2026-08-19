@@ -16,14 +16,14 @@
   --shadow: 0 1px 0 rgba(14,17,22,.04), 0 10px 30px -18px rgba(14,17,22,.45);
 }
 
-html{ -webkit-text-size-adjust:100%; overflow-y:scroll; scrollbar-gutter: stable; overscroll-behavior:none; }
+html{ -webkit-text-size-adjust:100%; overflow-y:scroll; overflow-x:hidden; scrollbar-gutter: stable; overscroll-behavior-y:contain; }
 body{
   background:var(--paper);
   color:var(--ink);
   font-family:'Inter',system-ui,sans-serif;
   font-weight:500;
   -webkit-font-smoothing:antialiased;
-  overscroll-behavior:none;
+  touch-action:pan-y;
 }
 
 button, input{ font:inherit; color:inherit; }
@@ -31,7 +31,30 @@ button{ border:0; cursor:pointer; background:none; text-align:left; }
 h1,h2,h3{ font-family:'Space Grotesk',sans-serif; font-weight:700; }
 .mono{ font-family:'JetBrains Mono',monospace; }
 
-.app{ min-height:100vh; min-height:100dvh; padding-bottom:calc(120px + env(safe-area-inset-bottom)); overflow-x:clip; overscroll-behavior:none; }
+.app{ min-height:100vh; min-height:100dvh; padding-bottom:calc(120px + env(safe-area-inset-bottom)); touch-action:pan-y; }
+.app.refreshing{ opacity:.96; }
+@keyframes spin { from { transform:rotate(0deg); } to { transform:rotate(360deg); } }
+
+/* ---------- PULL-TO-REFRESH INDICATOR ---------- */
+.pull-indicator{
+  position:fixed; top:0; left:50%; transform:translateX(-50%) translateY(-20px) scale(0.6);
+  z-index:500; opacity:0; pointer-events:none;
+  transition:opacity .18s ease, transform .18s ease;
+}
+.pull-indicator-inner{
+  display:inline-flex; align-items:center; gap:8px;
+  padding:10px 14px; border-radius:999px;
+  background:rgba(14,17,22,.88); color:#fff;
+  border:2px solid rgba(255,255,255,.12);
+  box-shadow:0 10px 24px -15px rgba(14,17,22,.55);
+}
+.pull-indicator .icon{ width:18px; height:18px; color:var(--sun); }
+.pull-indicator-text{
+  font-size:11px; font-weight:800; letter-spacing:.08em;
+  text-transform:uppercase; white-space:nowrap;
+}
+.pull-indicator.spinning{ opacity:1; transform:translateX(-50%) translateY(0) scale(1); }
+
 .container{ width:min(100%,480px); margin:auto; padding:18px 16px 8px; }
 
 .icon{ width:22px; height:22px; stroke:currentColor; fill:none; stroke-width:2.2; stroke-linecap:round; stroke-linejoin:round; flex-shrink:0; }
@@ -41,7 +64,7 @@ h1,h2,h3{ font-family:'Space Grotesk',sans-serif; font-weight:700; }
    · bottom-nav 260 · header/page-head 150 · cta-bar 90.
    The crop (290) is deliberately ABOVE every bottom sheet (280) — it is
    launched from the Edit-profile sheet and must never render behind it. */
-.header{ position:sticky; top:0; z-index:150; display:flex; align-items:center; justify-content:space-between; background:var(--paper); margin:-18px -16px 16px; padding:18px 16px 12px; height:86px; flex-shrink:0; }
+.header{ position:sticky; top:0; z-index:150; display:flex; align-items:center; justify-content:space-between; background:var(--paper); margin:-18px -16px 16px; padding:12px 16px 10px; height:72px; flex-shrink:0; }
 .brand{ display:flex; align-items:center; gap:12px; }
 .brand-mark{ width:56px; height:56px; border-radius:14px; display:flex; align-items:center; justify-content:center; overflow:hidden; flex-shrink:0; }
 .brand-logo{ width:100%; height:100%; object-fit:cover; display:block; flex-shrink:0; }
@@ -75,7 +98,7 @@ html.popup-open .page-head {
 }
 
 /* ---------- SUB-SCREEN PAGE HEAD ---------- */
-.page-head{ position:sticky; top:0; z-index:150; display:flex; align-items:center; gap:13px; background:var(--paper); margin:-18px -16px 20px; padding:18px 16px 12px; height:72px; flex-shrink:0; }
+.page-head{ position:sticky; top:0; z-index:150; display:flex; align-items:center; gap:13px; background:var(--paper); margin:-18px -16px 20px; padding:12px 16px 10px; height:64px; flex-shrink:0; }
 .page-head-text{ flex:1; min-width:0; }
 .page-title{ font-size:clamp(20px, 5vw, 28px); font-weight:800; letter-spacing:-1px; font-family:'Space Grotesk',sans-serif; line-height:1.1; }
 .page-sub{ font-size:11px; font-weight:600; color:var(--muted); margin-top:3px; }
@@ -275,9 +298,9 @@ button.cell.has-photo:hover .cell-photo{ transform:scale(1.09); }
 
 /* ---------- BOTTOM NAV ---------- */
 .bottom-nav{
-  /* This is viewport-fixed rather than page-positioned: scrolling any tab
-     must never move, resize, or let content overlap the five nav controls. */
-  position:fixed; left:0; right:0; bottom:calc(16px + env(safe-area-inset-bottom)); margin:0 auto;
+  /* Keep the nav visually attached to the viewport edge, without creating
+     extra page scroll gaps above/below it. */
+  position:fixed; left:0; right:0; bottom:calc(12px + env(safe-area-inset-bottom)); margin:0 auto;
   width:min(calc(100% - 24px), 452px); height:74px; min-height:74px; box-sizing:border-box;
   background:var(--ink); border-radius:24px;
   display:flex; align-items:center; justify-content:space-around; gap:7px; padding:7px;
@@ -501,6 +524,41 @@ html.popup-open .bottom-nav,
 .kv :last-child{ flex-shrink:0; text-align:right; }
 .sec-title{ font-size:18px; font-weight:800; letter-spacing:-.6px; margin:22px 3px 12px; font-family:'Space Grotesk',sans-serif; }
 .sec-title:first-of-type{ margin-top:0; }
+
+.coupon-card{ padding:14px; display:flex; flex-direction:column; gap:12px; }
+.coupon-input-row{ display:flex; align-items:center; gap:10px; }
+.coupon-input{
+  flex:1; min-width:0; height:52px; border:2px solid var(--line); border-radius:16px;
+  background:var(--paper); color:var(--ink); font:inherit; font-weight:700; font-size:15px;
+  padding:0 16px; box-sizing:border-box; outline:none; box-shadow:var(--shadow);
+}
+.coupon-input::placeholder{ color:var(--muted); }
+.coupon-input:focus{ border-color:var(--ink); }
+.coupon-apply{
+  height:52px; padding:0 18px; border:0; border-radius:16px; background:var(--ink);
+  color:var(--sun); font:inherit; font-weight:800; font-size:15px; letter-spacing:-.2px;
+  cursor:pointer; box-shadow:var(--shadow); flex-shrink:0;
+}
+.coupon-option{
+  display:flex; align-items:center; gap:12px; width:100%; background:var(--cell);
+  border:2px solid var(--line); border-radius:18px; padding:12px 12px 12px 10px;
+  box-shadow:var(--shadow); cursor:pointer; text-align:left; transition:border-color .16s ease, box-shadow .16s ease, transform .12s ease;
+}
+.coupon-option:active{ transform:scale(.985); }
+.coupon-option.on{ border-color:var(--ink); box-shadow:0 0 0 3px rgba(14,17,22,.07), var(--shadow); }
+.coupon-badge{
+  width:38px; height:38px; border-radius:12px; display:flex; align-items:center; justify-content:center;
+  color:#fff; flex-shrink:0; box-shadow:inset 0 0 0 1px rgba(255,255,255,.18);
+}
+.coupon-badge .icon{ width:19px; height:19px; }
+.coupon-copy{ flex:1; min-width:0; }
+.coupon-title{ font-size:14px; font-weight:800; letter-spacing:-.2px; color:var(--ink); }
+.coupon-subtitle{ font-size:11px; font-weight:600; color:var(--muted); line-height:1.45; margin-top:2px; overflow-wrap:anywhere; }
+.coupon-check{
+  width:22px; height:22px; border-radius:50%; border:2px solid var(--line); flex-shrink:0;
+  display:flex; align-items:center; justify-content:center; background:transparent; color:var(--sun);
+}
+.coupon-option.on .coupon-check{ background:var(--ink); border-color:var(--ink); }
 
 /* ---------- PROFILE ---------- */
 .profile-head{ display:flex; align-items:center; gap:16px; padding:6px 2px 18px; }
@@ -886,6 +944,37 @@ html.popup-open .bottom-nav,
   gap:10px; padding:24px; text-align:center;
   color:var(--muted); font-size:12.5px; font-weight:600; line-height:1.5;
 }
+
+/* ---------- TRACKING MAP ---------- */
+.track-map-wrap{ position:relative; border-radius:16px; overflow:hidden; margin-top:12px; border:2px solid var(--line); }
+.track-map{ width:100%; height:220px; }
+.track-map .maplibregl-canvas{ outline:none; }
+.track-map .maplibregl-map{ font-family:'Inter',system-ui,sans-serif; }
+.track-map .maplibregl-ctrl-top-right{ right:10px; top:10px; }
+.track-map .maplibregl-ctrl-group{
+  border:2px solid var(--line); border-radius:12px; overflow:hidden;
+  box-shadow:var(--shadow); background:transparent;
+}
+.track-map .maplibregl-ctrl-group button{
+  width:36px; height:36px; background:var(--cell);
+  border-bottom:2px solid var(--line);
+  transition:background .16s ease;
+}
+.track-map .maplibregl-ctrl-group button:last-child{ border-bottom:0; }
+.track-map .maplibregl-ctrl-group button:hover{ background:var(--paper); }
+.track-map .maplibregl-ctrl-group button:focus{ box-shadow:none; }
+.track-map .maplibregl-ctrl-bottom-right,
+.track-map .maplibregl-ctrl-attrib{ display:none; }
+.track-map .maplibregl-ctrl-logo{ display:none; }
+.track-map-msg{
+  position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
+  background:rgba(243,241,233,.92); color:var(--muted); font-size:12px; font-weight:600;
+}
+.track-map-fallback{
+  display:flex; align-items:center; justify-content:center; gap:8px;
+  height:220px; color:var(--muted); font-size:12px; font-weight:600;
+  background:var(--paper); border:2px solid var(--line); border-radius:16px;
+}
 .loc-map-fallback .icon{ color:var(--cobalt); }
 .loc-map-fallback code{ font-size:11px; background:var(--line); padding:1px 5px; border-radius:5px; }
 .loc-map-msg{
@@ -918,7 +1007,7 @@ html.popup-open .bottom-nav,
     display:flex; align-items:center; gap:28px;
     position:sticky; top:0; z-index:260;
     background:var(--paper);
-    border-bottom:1px solid var(--line);
+    border-bottom:none;
     padding:18px clamp(40px, 10vw, 200px);
   }
   .top-brand{

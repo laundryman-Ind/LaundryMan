@@ -29,7 +29,7 @@ const fmtExpiry = (v) => {
   return d.length > 2 ? d.slice(0, 2) + '/' + d.slice(2) : d
 }
 
-const PaymentMethods = ({ navigate, notify, params }) => {
+const PaymentMethods = ({ navigate, notify, params, back }) => {
   const { payMethods, payMethod, setPayMethod, addPayMethod, removePayMethod } = useApp()
   const [addType, setAddType] = useState(null)
   const [form, setForm] = useState(EMPTY_FORM)
@@ -40,7 +40,7 @@ const PaymentMethods = ({ navigate, notify, params }) => {
   useScrollLock(!!addType)
   const { sheetRef: addSheetRef, handlers: addSwipe } = useSwipeDismiss(() => setAddType(null))
 
-  const onBack = () => navigate(params?.from === 'checkout' ? 'checkout' : 'profile')
+  const onBack = () => (typeof back === 'function' ? back() : navigate(params?.from === 'checkout' ? 'checkout' : 'profile'))
 
   const pick = (id) => {
     setPayMethod(id)
@@ -58,7 +58,7 @@ const PaymentMethods = ({ navigate, notify, params }) => {
     setErrors({})
   }
 
-  const save = () => {
+  const save = async () => {
     const errs = {}
     if (addType === 'upi') {
       if (!/^[\w.\-]{2,}@[a-zA-Z]{2,}$/.test(form.upiId.trim())) {
@@ -81,41 +81,49 @@ const PaymentMethods = ({ navigate, notify, params }) => {
       return
     }
 
-    if (addType === 'upi') {
-      const upiId = form.upiId.trim()
-      addPayMethod({
-        type: 'upi',
-        upiId,
-        holder: form.holder.trim(),
-        icon: 'phone',
-        label: `UPI · ${upiId}`,
-        detail: form.holder.trim() || 'Unified Payments Interface',
-      })
-      notify('UPI ID added')
-    } else {
-      const digits = form.number.replace(/\s/g, '')
-      const brand = brandOf(digits)
-      const last4 = digits.slice(-4)
-      addPayMethod({
-        type: addType,
-        brand,
-        last4,
-        expiry: form.expiry,
-        holder: form.holder.trim(),
-        icon: 'card',
-        label: `${addType === 'credit' ? 'Credit' : 'Debit'} card ·••${last4}`,
-        detail: `${brand} · exp ${form.expiry}`,
-      })
-      notify(`${addType === 'credit' ? 'Credit' : 'Debit'} card added`)
+    try {
+      if (addType === 'upi') {
+        const upiId = form.upiId.trim()
+        await addPayMethod({
+          type: 'upi',
+          upiId,
+          holder: form.holder.trim(),
+          icon: 'phone',
+          label: `UPI · ${upiId}`,
+          detail: form.holder.trim() || 'Unified Payments Interface',
+        })
+        notify('UPI ID added')
+      } else {
+        const digits = form.number.replace(/\s/g, '')
+        const brand = brandOf(digits)
+        const last4 = digits.slice(-4)
+        await addPayMethod({
+          type: addType,
+          brand,
+          last4,
+          expiry: form.expiry,
+          holder: form.holder.trim(),
+          icon: 'card',
+          label: `${addType === 'credit' ? 'Credit' : 'Debit'} card ·••${last4}`,
+          detail: `${brand} · exp ${form.expiry}`,
+        })
+        notify(`${addType === 'credit' ? 'Credit' : 'Debit'} card added`)
+      }
+      setAddType(null)
+      setForm(EMPTY_FORM)
+    } catch (e) {
+      notify(e.message || 'Failed to save payment method')
     }
-    setAddType(null)
-    setForm(EMPTY_FORM)
   }
 
-  const doDelete = () => {
-    removePayMethod(deleteTarget.id)
-    notify(`${deleteTarget.label} removed`)
-    setDeleteTarget(null)
+  const doDelete = async () => {
+    try {
+      await removePayMethod(deleteTarget.id)
+      notify(`${deleteTarget.label} removed`)
+      setDeleteTarget(null)
+    } catch (e) {
+      notify(e.message || 'Failed to remove payment method')
+    }
   }
 
   const icoClass = (type) => (type === 'upi' ? 'pay-ico upi' : type === 'credit' ? 'pay-ico credit' : type === 'cod' ? 'pay-ico cod' : 'pay-ico debit')
@@ -125,7 +133,7 @@ const PaymentMethods = ({ navigate, notify, params }) => {
       <PageHeader title="Payment methods" sub="Add UPI, debit or credit" onBack={onBack} />
 
       {/* SAVED METHODS */}
-      {payMethods.length > 0 && (
+      {Array.isArray(payMethods) && payMethods.length > 0 && (
         <>
           <SectionLabel title="Saved methods" />
           {payMethods.map((m) => (

@@ -4,6 +4,7 @@ import BottomNav from './components/BottomNav'
 import TopNav from './components/TopNav'
 import SiteFooter from './components/SiteFooter'
 import Toast from './components/Toast'
+import Icon from './components/Icon'
 import Login from './pages/Login'
 import Otp from './pages/Otp'
 import Name from './pages/Name'
@@ -33,19 +34,42 @@ const SCREEN_LABELS = {
 }
 
 const AppContent = () => {
-  const { authed, login, updateUser, user, reloadFromStorage } = useApp()
+  const { authed, login, updateUser, user, reloadFromStorage, refreshFromDatabase } = useApp()
   const [screen, setScreen] = useState('home')
   const [params, setParams] = useState({})
+  const [navHistory, setNavHistory] = useState([])
   const [toast, setToast] = useState('')
   const [authStep, setAuthStep] = useState('login') // 'login' | 'otp' | 'name'
   const [authNum, setAuthNum] = useState('')
   const [authChecked, setAuthChecked] = useState(false)
   const [keyboardOpen, setKeyboardOpen] = useState(false)
+  const [refreshing, setRefreshing] = useState(false)
   const pageRefreshRef = useRef(null)
+  const appRef = useRef(null)
+  const pullIndicatorRef = useRef(null)
+  const showLogin = !authed
 
-  // Kept as plumbing: pages may register a section-specific refresh handler
-  // here. The pull-to-refresh gesture itself was removed (it made the screen
-  // stretch while dragging), so nothing triggers this today.
+  const notify = (msg) => {
+    setToast(msg)
+    clearTimeout(window.__t)
+    window.__t = setTimeout(() => setToast(''), 1700)
+  }
+
+  const doRefresh = useCallback(async () => {
+    const action = pageRefreshRef.current || refreshFromDatabase || reloadFromStorage
+    setRefreshing(true)
+    try {
+      if (typeof action === 'function') {
+        await action()
+      }
+      notify('Refreshed')
+    } catch (e) {
+      notify('Refresh failed')
+    } finally {
+      setRefreshing(false)
+    }
+  }, [notify, refreshFromDatabase, reloadFromStorage])
+
   const registerRefresh = useCallback((fn) => {
     pageRefreshRef.current = fn
   }, [])
@@ -76,30 +100,155 @@ const AppContent = () => {
     }
   }, [])
 
-  const notify = (msg) => {
-    setToast(msg)
-    clearTimeout(window.__t)
-    window.__t = setTimeout(() => setToast(''), 1700)
-  }
-
   const navigate = (s, p = {}) => {
+    setNavHistory((prev) => {
+      const last = prev[prev.length - 1]
+      if (!last || last.screen !== screen || JSON.stringify(last.params) !== JSON.stringify(params)) {
+        return [...prev, { screen, params }]
+      }
+      return prev
+    })
     setParams(p)
     setScreen(s)
     window.scrollTo({ top: 0 })
   }
 
   const back = () => {
-    if (['service', 'cart', 'address'].includes(screen)) navigate('services')
-    else if (screen === 'checkout') navigate('address', { from: 'checkout' })
-    else if (screen === 'tracking') navigate('orders')
-    else if (screen === 'support') navigate('profile')
-    else if (screen === 'payments') navigate('profile')
-    else navigate('home')
+    if (navHistory.length === 0) {
+      if (['service', 'cart', 'address'].includes(screen)) {
+        setParams({})
+        setScreen('services')
+      } else if (screen === 'checkout') {
+        setParams({ from: 'checkout' })
+        setScreen('address')
+      } else if (screen === 'tracking') {
+        setParams({})
+        setScreen('orders')
+      } else if (screen === 'support' || screen === 'payments') {
+        setParams({})
+        setScreen('profile')
+      } else {
+        setParams({})
+        setScreen('home')
+      }
+      return
+    }
+
+    const prev = navHistory[navHistory.length - 1]
+    setNavHistory((items) => items.slice(0, -1))
+    setParams(prev.params || {})
+    setScreen(prev.screen)
   }
 
   const go = { navigate, notify, back, registerRefresh }
 
-  const showLogin = !authed
+  useEffect(() => {
+    if (!authed || showLogin) return
+
+    const node = appRef.current
+    if (!node) return
+
+    let startY = null
+    let pullDistance = 0
+    let wheelLocked = false
+    let wheelResetTimer = null
+
+    const resetPull = () => {
+      clearTimeout(wheelResetTimer)
+      startY = null
+      pullDistance = 0
+      wheelLocked = false
+      const ind = pullIndicatorRef.current
+      if (ind) {
+        ind.style.opacity = '0'
+        ind.style.transform = 'translateX(-50%) translateY(-20px) scale(0.6)'
+        ind.classList.remove('spinning')
+      }
+    }
+
+    const onTouchStart = (event) => {
+      const touch = event.touches && event.touches[0]
+      if (!touch || window.scrollY > 0) {
+        startY = null
+        return
+      }
+      startY = touch.clientY
+    }
+
+    const onTouchMove = (event) => {
+      if (startY === null || window.scrollY > 0) return
+      const touch = event.touches && event.touches[0]
+      if (!touch) return
+      const delta = touch.clientY - startY
+      if (delta <= 0) return
+      event.preventDefault()
+      pullDistance = Math.min(delta * 0.55, 110)
+      const ind = pullIndicatorRef.current
+      if (ind) {
+        const progress = Math.min(pullDistance / 70, 1)
+        ind.style.opacity = String(progress)
+        ind.style.transform = `translateX(-50%) translateY(${pullDistance * 0.35}px) scale(${0.6 + progress * 0.4})`
+      }
+    }
+
+    const onWheel = (event) => {
+      if (window.scrollY > 0 || event.deltaY >= 0) return
+      if (event.ctrlKey === false && window.scrollY === 0) {
+        event.preventDefault()
+        clearTimeout(wheelResetTimer)
+        pullDistance = Math.min(pullDistance + Math.abs(event.deltaY) * 0.15, 110)
+        const ind = pullIndicatorRef.current
+        if (ind) {
+          const progress = Math.min(pullDistance / 70, 1)
+          ind.style.opacity = String(progress)
+          ind.style.transform = `translateX(-50%) translateY(${pullDistance * 0.35}px) scale(${0.6 + progress * 0.4})`
+        }
+        if (pullDistance > 70) {
+          node.classList.add('refreshing')
+          if (ind) ind.classList.add('spinning')
+          doRefresh().finally(() => {
+            node.classList.remove('refreshing')
+            resetPull()
+          })
+        } else {
+          wheelResetTimer = setTimeout(resetPull, 400)
+        }
+      }
+    }
+
+    const onTouchEnd = async () => {
+      if (pullDistance > 70) {
+        node.classList.add('refreshing')
+        const ind = pullIndicatorRef.current
+        if (ind) ind.classList.add('spinning')
+        await doRefresh()
+        node.classList.remove('refreshing')
+      }
+      resetPull()
+    }
+
+    // Auto-reset pull-to-refresh when the page actually scrolls — catches
+    // the case where the wheel handler set the transform but no touchend fires
+    // (desktop / narrow viewport).
+    const onScroll = () => { if (window.scrollY > 0) resetPull() }
+
+    node.addEventListener('touchstart', onTouchStart, { passive: true })
+    node.addEventListener('touchmove', onTouchMove, { passive: false })
+    node.addEventListener('touchend', onTouchEnd)
+    node.addEventListener('touchcancel', resetPull)
+    node.addEventListener('wheel', onWheel, { passive: false })
+    window.addEventListener('scroll', onScroll, { passive: true })
+
+    return () => {
+      node.removeEventListener('touchstart', onTouchStart)
+      node.removeEventListener('touchmove', onTouchMove)
+      node.removeEventListener('touchend', onTouchEnd)
+      node.removeEventListener('touchcancel', resetPull)
+      node.removeEventListener('wheel', onWheel)
+      window.removeEventListener('scroll', onScroll)
+      resetPull()
+    }
+  }, [authed, doRefresh, showLogin])
 
   // Android hardware back button hook (native MainActivity calls this and reads
   // the returned string):
@@ -238,6 +387,7 @@ const AppContent = () => {
 
   return (
     <div
+      ref={appRef}
       className={`${showLogin ? 'app app-login' : 'app'}${keyboardOpen ? ' keyboard-open' : ''}`}
     >
       {showLogin && (
@@ -261,6 +411,13 @@ const AppContent = () => {
           />
         )
       )}
+      {/* Pull-to-refresh indicator — fixed at the very top, driven by refs for 60 fps */}
+      <div ref={pullIndicatorRef} className="pull-indicator" aria-live="polite" aria-label="Pull to refresh">
+        <span className="pull-indicator-inner">
+          <Icon name="arrow-up" className="icon" />
+          <span className="pull-indicator-text">Pull to refresh</span>
+        </span>
+      </div>
       {authed && <TopNav screen={screen} navigate={navigate} notify={notify} />}
       {!showLogin && render()}
       {authed && <BottomNav screen={screen} navigate={navigate} />}

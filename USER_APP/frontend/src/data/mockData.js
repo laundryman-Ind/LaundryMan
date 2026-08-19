@@ -3,7 +3,15 @@
 export const IMG = (id, w) =>
   `https://images.unsplash.com/photo-${id}?auto=format&fit=crop&w=${w}&q=75`
 
-export const formatPrice = (n) => '₹' + Number(n).toLocaleString('en-IN')
+export const formatPrice = (n) => {
+  const num = Number(n)
+  if (isNaN(num) || !isFinite(num)) return '₹0'
+  try {
+    return '₹' + num.toLocaleString('en-IN')
+  } catch {
+    return '₹' + Math.round(num)
+  }
+}
 
 // ---------- SERVICES ----------
 // First 8 (in this order) drive the Home screen — matches the UI file exactly.

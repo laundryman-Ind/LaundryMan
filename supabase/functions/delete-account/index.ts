@@ -66,7 +66,31 @@ Deno.serve(async (req) => {
       return json({ error: 'Invalid or expired session' }, 401)
     }
 
-    // 2) Delete the user's profile row. Service role legitimately bypasses
+    // 2) Remove every user-owned record in the app tables before deleting the
+    //    auth account. Order matters: delete children first, then parents.
+    //    The service-role key bypasses RLS server-side.
+    const userTables = [
+      'reviews',        // references orders (order_id)
+      'coupon_uses',    // references coupons (coupon_id)
+      'push_tokens',    // device tokens for notifications
+      'notifications',  // in-app notification inbox
+      'orders',         // contains the full order object in data
+      'payments',       // saved payment instruments
+      'addresses',      // saved delivery addresses
+    ]
+
+    for (const table of userTables) {
+      const { error } = await supabase
+        .from(table)
+        .delete()
+        .eq('user_id', user.id)
+      if (error) {
+        // Log but don't block deletion for non-critical tables
+        console.warn(`Failed to delete ${table} for user ${user.id}:`, error.message)
+      }
+    }
+
+    // 3) Delete the user's profile row. Service role legitimately bypasses
     //    RLS server-side; the client RLS policies are untouched.
     const { error: profileErr } = await supabase
       .from('profiles')
@@ -76,7 +100,7 @@ Deno.serve(async (req) => {
       return json({ error: `Could not delete profile: ${profileErr.message}` }, 500)
     }
 
-    // 3) Delete the auth account. The profile row is also cascaded by the FK
+    // 4) Delete the auth account. The profile row is also cascaded by the FK
     //    (ON DELETE CASCADE) when that constraint exists.
     const { error: delErr } = await supabase.auth.admin.deleteUser(user.id)
     if (delErr) {

@@ -30,7 +30,7 @@ const EMPTY_STATES = {
 const DEMO_TICK_MS = 8000
 
 const Orders = ({ navigate, notify, registerRefresh }) => {
-  const { orders, activeOrder, cancelOrder, reorder, rateOrder, advanceActiveOrder, cartCount, reloadFromStorage } = useApp()
+  const { orders, activeOrder, cancelOrder, reorder, rateOrder, advanceActiveOrder, cartCount, refreshFromDatabase } = useApp()
   const [filter, setFilter] = useState('all')
   const [reviewTarget, setReviewTarget] = useState(null)
   const [rating, setRating] = useState(0)
@@ -44,10 +44,12 @@ const Orders = ({ navigate, notify, registerRefresh }) => {
 
   // Pull-to-refresh resets this section only: re-sync stored data, restore the
   // default filter and stop the live demo — never reloads the whole app.
+  // NOTE: refreshFromDatabase is included in deps so the handler always calls
+  // the latest version (avoids stale-closure bugs across re-renders).
   useEffect(() => {
     if (!registerRefresh) return
-    registerRefresh(() => {
-      reloadFromStorage()
+    registerRefresh(async () => {
+      await refreshFromDatabase()
       setFilter('all')
       setDemo(false)
       setReviewTarget(null)
@@ -55,8 +57,7 @@ const Orders = ({ navigate, notify, registerRefresh }) => {
       notify('Orders refreshed')
     })
     return () => registerRefresh(null)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [registerRefresh])
+  }, [registerRefresh, refreshFromDatabase, notify])
 
   // Live demo: advance the active order's status on a timer.
   useEffect(() => {
@@ -114,10 +115,14 @@ const Orders = ({ navigate, notify, registerRefresh }) => {
     setComment(o.review?.comment || '')
   }
 
-  const saveReview = () => {
+  const saveReview = async () => {
     if (rating < 1) return notify('Tap a star to rate first')
-    rateOrder(reviewTarget.id, rating, comment.trim())
-    notify('Thanks — review saved!')
+    try {
+      await rateOrder(reviewTarget.id, rating, comment.trim())
+      notify('Thanks — review saved!')
+    } catch (e) {
+      notify('Review saved locally — sync failed. Pull to refresh.')
+    }
     setReviewTarget(null)
   }
 
@@ -128,10 +133,15 @@ const Orders = ({ navigate, notify, registerRefresh }) => {
     navigate('cart', { from: 'orders' })
   }
 
-  const doCancel = () => {
-    cancelOrder(cancelTarget.id)
-    notify(`Order #${cancelTarget.id} cancelled`)
+  const doCancel = async () => {
+    const target = cancelTarget
     setCancelTarget(null)
+    try {
+      await cancelOrder(target.id)
+      notify(`Order #${target.id} cancelled`)
+    } catch (e) {
+      notify(e.message || 'Could not cancel order — try again')
+    }
   }
 
   const pillClass = (o) =>

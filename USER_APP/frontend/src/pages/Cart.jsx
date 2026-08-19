@@ -7,12 +7,21 @@ import Stepper from '../components/Stepper'
 import SectionLabel from '../components/SectionLabel'
 import PhotoAttach from '../components/PhotoAttach'
 
-const Cart = ({ navigate, notify, params }) => {
+const Cart = ({ navigate, notify, params, back }) => {
   const { cartLines, cartTotal, setQty, itemPhotos } = useApp()
+  const gstRate = 0.18
+  const gstAmount = cartTotal * gstRate
+  const cgstAmount = gstAmount / 2
+  const sgstAmount = gstAmount / 2
+  const totalWithTax = cartTotal + gstAmount
 
   // Back returns to wherever the user actually came from (bag is reachable from
   // the service picker, Orders, and the address screen), defaulting to Services.
   const goBack = () => {
+    if (typeof back === 'function') {
+      back()
+      return
+    }
     const from = params?.from
     if (from === 'orders') navigate('orders')
     else if (from === 'address') navigate('address')
@@ -65,9 +74,11 @@ const Cart = ({ navigate, notify, params }) => {
       <div className="summary-card">
         <div className="totals">
           <div className="total-row"><span>Subtotal</span><span>{formatPrice(cartTotal)}</span></div>
+          <div className="total-row"><span>CGST 9%</span><span>{formatPrice(cgstAmount)}</span></div>
+          <div className="total-row"><span>SGST 9%</span><span>{formatPrice(sgstAmount)}</span></div>
           <div className="total-row"><span>Pickup &amp; delivery</span><strong>Free</strong></div>
           <div className="grand">
-            <div className="total-row"><span>Total</span><span>{formatPrice(cartTotal)}</span></div>
+            <div className="total-row"><span>Total</span><span>{formatPrice(totalWithTax)}</span></div>
           </div>
         </div>
       </div>
@@ -75,7 +86,7 @@ const Cart = ({ navigate, notify, params }) => {
       <div className="cta-bar">
         <div>
           <div className="cb-label">Total</div>
-          <div className="cb-total">{formatPrice(cartTotal)}</div>
+          <div className="cb-total">{formatPrice(totalWithTax)}</div>
         </div>
         <button className="bar-btn cobalt" onClick={() => navigate('address', { from: 'cart' })}>
           Checkout <Icon name="arrow" style={{ width: 15, height: 15 }} />

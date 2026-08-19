@@ -1,4 +1,5 @@
 import { formatPrice } from '../data/mockData.js'
+import { registerPlugin } from '@capacitor/core'
 
 // A4 LaundryMan invoice rendered as a REAL PDF (selectable text, print-ready)
 // via pdfmake. Only reachable for DELIVERED orders. pdfmake itself is loaded
@@ -309,13 +310,41 @@ export const buildInvoiceDocument = (order, user, logo = '') => {
   }
 }
 
+// Helper to safely extract base64 from pdfmake document across all environments
+const getPdfBase64 = async (pdf) => {
+  try {
+    const res = await pdf.getBase64()
+    if (typeof res === 'string' && res.length > 0) return res
+  } catch (e) {
+    console.warn('pdf.getBase64() failed, trying getBlob() fallback:', e)
+  }
+
+  try {
+    const blob = await pdf.getBlob()
+    return await new Promise((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onloadend = () => {
+        const dataUrl = reader.result || ''
+        const base64 = String(dataUrl).split(',')[1] || ''
+        if (base64) resolve(base64)
+        else reject(new Error('FileReader returned empty base64'))
+      }
+      reader.onerror = (err) => reject(err || new Error('FileReader failed'))
+      reader.readAsDataURL(blob)
+    })
+  } catch (e) {
+    console.error('Failed to get PDF base64:', e)
+    throw e
+  }
+}
+
 // Generate and download the A4 PDF for a delivered order.
+// In the browser, triggers a normal file download.
+// In the Capacitor APK, saves the PDF into Documents/LaundryMan/invoice/
+// (creating folders automatically) and posts a "Download complete" notification.
 export const generateInvoicePdf = async (order, user) => {
   const logo = await loadLogo()
-  // pdfmake + its trimmed font set (Roboto + Roboto Medium only; the full
-  // vfs ships unused italic variants) are only needed when an invoice is
-  // actually downloaded — load them on demand so the app starts fast and the
-  // initial bundle stays small.
+  // pdfmake + its trimmed font set (Roboto + Roboto Medium only)
   const [{ default: pdfMake }, { default: vfsLite }] = await Promise.all([
     import('pdfmake/build/pdfmake.js'),
     import('./vfs-lite.js'),
@@ -323,5 +352,30 @@ export const generateInvoicePdf = async (order, user) => {
   pdfMake.addVirtualFileSystem(vfsLite)
   const doc = buildInvoiceDocument(order, user, logo)
   const pdf = pdfMake.createPdf(doc)
-  pdf.download(`LaundryMan-invoice-${order.id}.pdf`)
+
+  const filename = `LaundryMan_Invoice_${order.id}.pdf`
+
+  // Capacitor native app (APK) — save into Documents/LaundryMan/invoice/
+  if (window.Capacitor?.isNativePlatform?.()) {
+    const InvoiceDownloader = registerPlugin('InvoiceDownloader')
+
+    // Show a "Saving invoice…" notification while the PDF generates (best effort)
+    try {
+      await InvoiceDownloader.showDownloading({ fileName: filename })
+    } catch { /* ignore */ }
+
+    const base64 = await getPdfBase64(pdf)
+
+    try {
+      const res = await InvoiceDownloader.savePdf({ data: base64, fileName: filename })
+      return res
+    } catch (err) {
+      console.error('InvoiceDownloader.savePdf failed:', err)
+      throw new Error('Failed to save invoice: ' + (err?.message || err))
+    }
+  }
+
+  // Browser — normal download
+  await pdf.download(filename)
+  return { success: true, fileName: filename }
 }

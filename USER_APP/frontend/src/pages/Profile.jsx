@@ -208,13 +208,18 @@ const Profile = ({ navigate, notify }) => {
       <Modal
         open={confirmClear}
         title="Clear order history?"
-        text="This deletes every order for this account — it can't be undone. Your profile, saved addresses and payment methods are kept."
-        confirmLabel="Delete all orders"
+        text="This hides all orders from your view on every device. Your profile, saved addresses and payment methods are kept. Order records are preserved for accounting."
+        confirmLabel="Clear history"
         danger
-        onConfirm={() => {
-          clearOrders()
-          setConfirmClear(false)
-          notify('Order history cleared')
+        onConfirm={async () => {
+          try {
+            await clearOrders()
+            setConfirmClear(false)
+            notify('Order history cleared')
+          } catch {
+            setConfirmClear(false)
+            notify('Could not clear history — try again')
+          }
         }}
         onClose={() => setConfirmClear(false)}
       />

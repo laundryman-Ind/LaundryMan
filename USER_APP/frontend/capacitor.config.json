@@ -2,7 +2,7 @@
   "appId": "com.laundryman.app",
   "appName": "Laundry Man",
   "webDir": "dist",
-  "version": "beta0.1",
+  "version": "1.0.2",
   "server": {
     "androidScheme": "https"
   },

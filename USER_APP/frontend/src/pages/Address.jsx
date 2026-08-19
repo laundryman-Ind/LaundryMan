@@ -34,7 +34,7 @@ const accuracyLevel = (accuracy) => {
   return 'poor'
 }
 
-const Address = ({ navigate, notify, params }) => {
+const Address = ({ navigate, notify, params, back }) => {
   const {
     user,
     addresses,
@@ -148,7 +148,10 @@ const Address = ({ navigate, notify, params }) => {
     }
   }
 
-  const submit = () => {
+  const [saving, setSaving] = useState(false)
+  const [deleting, setDeleting] = useState(false)
+
+  const submit = async () => {
     const parts = ADDRESS_FIELDS.map((k) => form[k].trim()).filter(Boolean)
     if (!form.label.trim() || parts.length === 0) {
       notify('Fill in the address details')
@@ -173,25 +176,43 @@ const Address = ({ navigate, notify, params }) => {
       formatted_address: form.formatted_address || line,
       delivery_instructions: form.delivery_instructions.trim(),
     }
-    if (editing) {
-      updateAddress(editing.id, payload)
-      notify('Address updated')
-    } else {
-      addAddress(payload)
-      notify('Address added')
+    setSaving(true)
+    try {
+      if (editing) {
+        await updateAddress(editing.id, payload)
+        notify('Address updated')
+      } else {
+        await addAddress(payload)
+        notify('Address added')
+      }
+      closeForm()
+    } catch (e) {
+      notify(e?.message || 'Failed to save address')
+    } finally {
+      setSaving(false)
     }
-    closeForm()
   }
 
-  const doDelete = () => {
+  const doDelete = async () => {
     if (confirmDel) {
-      removeAddress(confirmDel.id)
-      notify('Address deleted')
+      setDeleting(true)
+      try {
+        await removeAddress(confirmDel.id)
+        notify('Address deleted')
+        setConfirmDel(null)
+      } catch (e) {
+        notify(e?.message || 'Failed to delete address')
+      } finally {
+        setDeleting(false)
+      }
     }
-    setConfirmDel(null)
   }
 
   const goBack = () => {
+    if (typeof back === 'function') {
+      back()
+      return
+    }
     const from = params?.from
     if (from && ['cart', 'checkout', 'home', 'profile', 'orders'].includes(from)) {
       navigate(from)
@@ -327,9 +348,9 @@ const Address = ({ navigate, notify, params }) => {
             />
           </div>
           <div className="row" style={{ gap: 10 }}>
-            <button className="btn btn-ghost" onClick={closeForm}>Cancel</button>
-            <button className="btn btn-ink" onClick={submit}>
-              {editing ? 'Update address' : 'Save address'}
+            <button className="btn btn-ghost" onClick={closeForm} disabled={saving}>Cancel</button>
+            <button className="btn btn-ink" onClick={submit} disabled={saving}>
+              {saving ? 'Saving…' : editing ? 'Update address' : 'Save address'}
             </button>
           </div>
         </div>
@@ -365,9 +386,9 @@ const Address = ({ navigate, notify, params }) => {
         open={!!confirmDel}
         title="Delete address?"
         text={confirmDel ? `Remove “${confirmDel.label} — ${confirmDel.line}”?` : ''}
-        confirmLabel="Delete"
+        confirmLabel={deleting ? 'Deleting…' : 'Delete'}
         onConfirm={doDelete}
-        onClose={() => setConfirmDel(null)}
+        onClose={() => !deleting && setConfirmDel(null)}
       />
     </div>
   )

@@ -20,6 +20,10 @@ public class MainActivity extends BridgeActivity {
 
     @Override
     public void onCreate(Bundle savedInstanceState) {
+        // Native helper that saves the invoice PDF to the public Downloads
+        // folder and posts a "Download complete" notification. Must be added
+        // before super.onCreate() builds the bridge.
+        initialPlugins.add(InvoiceDownloaderPlugin.class);
         super.onCreate(savedInstanceState);
         // The old working APK's Capacitor enabled wide-viewport support, which
         // makes the WebView honor the packaged `width=480` viewport meta and
@@ -58,6 +62,8 @@ public class MainActivity extends BridgeActivity {
             // Android 13+: granular media permissions replace READ_EXTERNAL_STORAGE.
             permissions.add(Manifest.permission.READ_MEDIA_IMAGES);
             permissions.add(Manifest.permission.READ_MEDIA_VIDEO);
+            // Android 13+: POST_NOTIFICATIONS is required for native notifications.
+            permissions.add(Manifest.permission.POST_NOTIFICATIONS);
         } else {
             permissions.add(Manifest.permission.READ_EXTERNAL_STORAGE);
         }

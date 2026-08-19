@@ -26,6 +26,7 @@ const PATHS = {
   tag: (<><path d="M3 12V5h7l10 10-5 5L5 10" /><circle cx="7" cy="7" r="1" /></>),
   plus: (<path d="M12 5v14M5 12h14" />),
   arrow: (<><path d="M5 12h14" /><path d="m13 6 6 6-6 6" /></>),
+  'arrow-up': (<><path d="M12 19V5" /><path d="m6 11 6-6 6 6" /></>),
   check: (<path d="m5 12 4 4L19 6" />),
   droplet: (<path d="M12 3s7 7.5 7 12a7 7 0 0 1-14 0c0-4.5 7-12 7-12Z" />),
   chevron: (<path d="m15 18-6-6 6-6" />),

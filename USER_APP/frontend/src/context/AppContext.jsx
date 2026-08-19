@@ -8,9 +8,20 @@ import {
   upsertAddress,
   removeAddress as removeAddressApi,
   listOrders,
+  listAllOrders,
   upsertOrder,
   deleteAllOrders,
+  hideAllOrders,
   listServices,
+  listReviews,
+  upsertReview,
+  getCart,
+  upsertCart,
+  placeOrderServer,
+  deleteCouponUse,
+  listPaymentMethods,
+  upsertPaymentMethod,
+  removePaymentMethod as removePaymentMethodApi,
 } from '../services/api'
 
 const AppContext = createContext()
@@ -20,7 +31,9 @@ export const useApp = () => useContext(AppContext)
 const load = (key, fallback) => {
   try {
     const raw = localStorage.getItem(key)
-    return raw ? JSON.parse(raw) : fallback
+    if (!raw) return fallback
+    const parsed = JSON.parse(raw)
+    return parsed !== null && parsed !== undefined ? parsed : fallback
   } catch {
     return fallback
   }
@@ -39,36 +52,39 @@ export const AppProvider = ({ children }) => {
   const [authed, setAuthed] = useState(() => !!localStorage.getItem('lm2_logged_in'))
 
   // Signed-in user — editable and persisted
-  const [user, setUser] = useState(() => load('lm2_user', USER))
+  const [user, setUser] = useState(() => load('lm2_user', USER) || USER)
 
   // Cart: { itemId: qty }
-  const [cart, setCart] = useState(() => load('lm2_cart', {}))
+  const [cart, setCart] = useState(() => load('lm2_cart', {}) || {})
 
   // Item photos: { itemId: dataUrl } — user proof attached while building an order
-  const [itemPhotos, setItemPhotos] = useState(() => load('lm2_item_photos', {}))
+  const [itemPhotos, setItemPhotos] = useState(() => load('lm2_item_photos', {}) || {})
 
   // Addresses — user-added only, no seeds
   const [addresses, setAddresses] = useState(() => {
     localStorage.removeItem('lm2_addresses') // drop legacy seeded addresses
-    return load('lm2_addresses_v2', [])
+    const loaded = load('lm2_addresses_v2', [])
+    return Array.isArray(loaded) ? loaded : []
   })
   const [selectedAddressId, setSelectedAddressId] = useState(() => {
     localStorage.removeItem('lm2_addr_id') // drop legacy selection
-    return load('lm2_addr_id_v2', '')
+    return load('lm2_addr_id_v2', '') || ''
   })
 
   // Payment — saved instruments (UPI / debit / credit) + selected id ('cod' = cash)
   const [payMethods, setPayMethods] = useState(() => {
     localStorage.removeItem('lm2_pay') // legacy static selection
-    return load('lm2_pay_methods', [])
+    const loaded = load('lm2_pay_methods', [])
+    return Array.isArray(loaded) ? loaded : []
   })
-  const [payMethod, setPayMethod] = useState(() => load('lm2_pay_v2', 'cod'))
+  const [payMethod, setPayMethod] = useState(() => load('lm2_pay_v2', 'cod') || 'cod')
 
   // Orders start empty — the user must place an order first.
   const [orders, setOrders] = useState(() => {
     localStorage.removeItem('lm2_orders') // drop legacy seeded history
     localStorage.removeItem('lm2_orders_v2')
-    return load('lm2_orders_v3', [])
+    const loaded = load('lm2_orders_v3', [])
+    return Array.isArray(loaded) ? loaded : []
   })
 
   // Catalog — services (with their priced items). Seeded from the bundled
@@ -93,6 +109,132 @@ export const AppProvider = ({ children }) => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  // Ensure a valid Supabase session exists (creates one in beta mode if needed).
+  // Called before every DB operation so stale/expired tokens don't silently fail.
+  const ensureSession = useCallback(async () => {
+    if (!isSupabaseConfigured) return
+    if (isBetaAuth) {
+      const u = await currentUser().catch(() => null)
+      if (!u && user?.phone) {
+        await createBetaSession(user.phone)
+      }
+    }
+  }, [user?.phone])
+
+  // Core refresh logic — fetches every data slice from Supabase and
+  // replaces local state. The DATABASE is always the source of truth.
+  //
+  // One-time migration: if the DB is genuinely empty (fetch succeeded AND
+  // returned zero rows), upload local data once. If the DB is unreachable,
+  // we skip migration entirely to avoid uploading stale localStorage data.
+  const _fetchAndMerge = useCallback(async () => {
+    await ensureSession()
+    const u = await currentUser().catch(() => null)
+    if (!u) return
+
+    const hasMigrated = localStorage.getItem('lm2_migrated') === '1'
+
+    // Track whether each fetch succeeded vs. failed (vs. returned empty).
+    // A failed fetch returns [] / {} as default, which looks identical to
+    // "genuinely empty" — we must distinguish the two to avoid uploading
+    // stale localStorage data when the DB is unreachable.
+    let addrsOk = false
+    let ordersOk = false
+    let cartOk = false
+
+    const [dbAddrs, dbAllOrders, dbReviews, dbServices, dbCart] = await Promise.all([
+      listAddresses().then((r) => { addrsOk = true; return r }).catch(() => []),
+      listAllOrders().then((r) => { ordersOk = true; return r }).catch(() => []),
+      listReviews().catch(() => []),
+      listServices().catch(() => null),
+      getCart().then((r) => { cartOk = true; return r }).catch(() => ({})),
+    ])
+
+    // Services: always prefer DB when available
+    if (dbServices && dbServices.length) setServices(dbServices)
+
+    // --- ADDRESSES: DB is authoritative ---
+    if (!hasMigrated && addrsOk && dbAddrs.length === 0) {
+      // One-time migration: DB is reachable AND genuinely empty.
+      // Push local addresses up to DB.
+      const localAddrs = load('lm2_addresses_v2', [])
+      if (Array.isArray(localAddrs) && localAddrs.length > 0) {
+        await Promise.all(localAddrs.map((a) => upsertAddress(a).catch(() => {})))
+        setAddresses(localAddrs)
+      } else {
+        setAddresses([])
+      }
+    } else if (addrsOk) {
+      // DB is reachable — DB wins unconditionally (even if empty)
+      setAddresses(dbAddrs)
+    }
+    // else: DB unreachable — keep current local state, do NOT restore from localStorage
+
+    // --- ORDERS: DB is authoritative ---
+    const dbOrders = dbAllOrders.filter((o) => !o?.hiddenAt)
+    const reviewMap = new Map()
+    for (const r of dbReviews) {
+      reviewMap.set(r.order_id, { rating: r.rating, comment: r.comment })
+    }
+    const dbOrdersWithReviews = dbOrders.map((o) => {
+      const review = reviewMap.get(o.id) || null
+      return { ...o, review }
+    })
+
+    if (!hasMigrated && ordersOk && dbAllOrders.length === 0) {
+      // One-time migration: DB reachable AND genuinely empty
+      const localOrders = load('lm2_orders_v3', [])
+      if (Array.isArray(localOrders) && localOrders.length > 0) {
+        const localWithReviews = localOrders.map((o) => ({
+          ...o,
+          review: reviewMap.get(o.id) || null,
+        }))
+        await Promise.all(localOrders.map((o) => upsertOrder(o).catch(() => {})))
+        setOrders(localWithReviews)
+      } else {
+        setOrders([])
+      }
+    } else if (ordersOk) {
+      // DB reachable — DB wins unconditionally
+      setOrders(dbOrdersWithReviews)
+    }
+    // else: DB unreachable — keep current local state
+
+    // --- CART: DB is authoritative ---
+    try {
+      if (!hasMigrated && cartOk && (!dbCart || Object.keys(dbCart).length === 0)) {
+        const localCart = load('lm2_cart', {})
+        if (localCart && Object.keys(localCart).length > 0) {
+          await upsertCart(localCart).catch(() => {})
+          setCart(localCart)
+        } else {
+          setCart({})
+        }
+      } else if (cartOk) {
+        setCart(dbCart && Object.keys(dbCart).length > 0 ? dbCart : {})
+      }
+      // else: DB unreachable — keep current local cart state
+    } catch (e) {
+      console.warn('cart sync failed', e)
+    }
+
+    // --- PAYMENT METHODS: DB is authoritative ---
+    try {
+      const dbPayMethods = await listPaymentMethods().catch(() => null)
+      if (dbPayMethods !== null) {
+        // DB reachable — DB wins
+        setPayMethods(Array.isArray(dbPayMethods) ? dbPayMethods : [])
+      }
+    } catch (e) {
+      console.warn('payment methods sync failed', e)
+    }
+
+    // Mark migration as done — all future syncs treat DB as authoritative
+    if (!hasMigrated) {
+      localStorage.setItem('lm2_migrated', '1')
+    }
+  }, [ensureSession])
+
   // When a Supabase session becomes active, load the user's addresses and
   // orders from the database. If the DB has data it wins (source of truth);
   // if the DB is empty but this device has local data, migrate it up once.
@@ -102,35 +244,7 @@ export const AppProvider = ({ children }) => {
     let cancelled = false
     ;(async () => {
       try {
-        // In beta mode, ensure we have a real Supabase session first.
-        // createBetaSession is idempotent — safe to call on every sync.
-        if (isBetaAuth) {
-          const u = await currentUser()
-          if (!u) {
-            const phone = user?.phone || ''
-            if (phone) await createBetaSession(phone)
-          }
-        }
-        const u = await currentUser()
-        if (!u || cancelled) return
-        const [dbAddrs, dbOrders] = await Promise.all([listAddresses(), listOrders()])
-        if (cancelled) return
-
-        const localAddrs = load('lm2_addresses_v2', [])
-        if (dbAddrs.length > 0) {
-          setAddresses(dbAddrs)
-        } else if (localAddrs.length > 0) {
-          await Promise.all(localAddrs.map((a) => upsertAddress(a).catch(() => {})))
-          setAddresses(localAddrs)
-        }
-
-        const localOrders = load('lm2_orders_v3', [])
-        if (dbOrders.length > 0) {
-          setOrders(dbOrders)
-        } else if (localOrders.length > 0) {
-          await Promise.all(localOrders.map((o) => upsertOrder(o).catch(() => {})))
-          setOrders(localOrders)
-        }
+        if (!cancelled) await _fetchAndMerge()
       } catch (e) {
         console.warn('DB sync failed', e)
       }
@@ -138,6 +252,43 @@ export const AppProvider = ({ children }) => {
     return () => { cancelled = true }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authed])
+
+  // Cross-device sync: refresh data whenever the app returns to the foreground,
+  // PLUS a periodic 30-second poll while the app is visible.  This catches
+  // changes made on the web app, another mobile device, or by a rider/admin
+  // updating order status in a separate dashboard.
+  useEffect(() => {
+    if (!authed || !isSupabaseConfigured) return
+    let timer = null
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        _fetchAndMerge().catch((e) => console.warn('visibility refresh failed', e))
+        // Restart the periodic timer when the app becomes visible
+        clearInterval(timer)
+        timer = setInterval(() => {
+          if (document.visibilityState === 'visible') {
+            _fetchAndMerge().catch((e) => console.warn('periodic refresh failed', e))
+          }
+        }, 30000) // 30 seconds
+      } else {
+        clearInterval(timer)
+        timer = null
+      }
+    }
+    // Start the initial timer if already visible
+    if (document.visibilityState === 'visible') {
+      timer = setInterval(() => {
+        if (document.visibilityState === 'visible') {
+          _fetchAndMerge().catch((e) => console.warn('periodic refresh failed', e))
+        }
+      }, 30000)
+    }
+    document.addEventListener('visibilitychange', onVisibility)
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibility)
+      clearInterval(timer)
+    }
+  }, [authed, _fetchAndMerge])
 
   useEffect(() => save('lm2_user', user), [user])
   useEffect(() => save('lm2_cart', cart), [cart])
@@ -148,27 +299,55 @@ export const AppProvider = ({ children }) => {
   useEffect(() => save('lm2_pay_v2', payMethod), [payMethod])
   useEffect(() => save('lm2_orders_v3', orders), [orders])
 
+  // Persist cart to the database when authenticated and Supabase is configured.
+  useEffect(() => {
+    if (!authed || !isSupabaseConfigured) return
+    let cancelled = false
+    ;(async () => {
+      try {
+        await ensureSession()
+        if (cancelled) return
+        await upsertCart(cart).catch((e) => console.warn('cart save failed', e))
+      } catch (e) {
+        console.warn('cart save failed', e)
+      }
+    })()
+    return () => { cancelled = true }
+  }, [cart, authed, ensureSession])
+
+  // Flatten items from all known services (dynamic DB services + fallback mock items)
+  const allItems = useMemo(() => {
+    const fromServices = (services || []).flatMap((s) =>
+      (s.items || []).map((it) => ({ ...it, serviceId: s.id }))
+    )
+    const map = new Map()
+    ITEM_INDEX.forEach((it) => map.set(it.id, it))
+    fromServices.forEach((it) => map.set(it.id, it))
+    return Array.from(map.values())
+  }, [services])
+
   // Derived cart data
   const cartLines = useMemo(
     () =>
-      Object.entries(cart)
+      Object.entries(cart || {})
         .map(([id, qty]) => {
-          const item = ITEM_INDEX.find((i) => i.id === id)
-          return item ? { ...item, qty } : null
+          const item = allItems.find((i) => i.id === id) || ITEM_INDEX.find((i) => i.id === id)
+          const numQty = Number(qty) || 0
+          return item ? { ...item, qty: numQty, price: Number(item.price) || 0 } : null
         })
-        .filter(Boolean),
-    [cart]
+        .filter((l) => l && l.qty > 0),
+    [cart, allItems]
   )
 
   const cartTotal = useMemo(
-    () => cartLines.reduce((sum, l) => sum + l.price * l.qty, 0),
+    () => cartLines.reduce((sum, l) => sum + (Number(l.price) || 0) * (Number(l.qty) || 0), 0),
     [cartLines]
   )
 
-  const cartCount = useMemo(() => cartLines.reduce((sum, l) => sum + l.qty, 0), [cartLines])
+  const cartCount = useMemo(() => cartLines.reduce((sum, l) => sum + (Number(l.qty) || 0), 0), [cartLines])
 
-  const activeOrder = orders.find((o) => o.statusKey !== 'delivered' && o.statusKey !== 'cancelled') || null
-  const historyOrders = orders.filter((o) => o.statusKey === 'delivered')
+  const activeOrder = (orders || []).find((o) => o && o.statusKey !== 'delivered' && o.statusKey !== 'cancelled') || null
+  const historyOrders = (orders || []).filter((o) => o && o.statusKey === 'delivered')
 
   // Actions
   const setQty = (itemId, qty) => {
@@ -200,28 +379,51 @@ export const AppProvider = ({ children }) => {
     })
   }
 
-  const addAddress = (addr) => {
+  // API-first mutations: the database write MUST succeed before local
+  // state is updated. This prevents stale local data from being persisted
+  // back to localStorage and re-uploaded on the next sync.
+
+  const addAddress = async (addr) => {
     const full = { id: 'a' + Date.now().toString(36), ...addr }
+    try {
+      await ensureSession()
+      await upsertAddress(full)
+    } catch (e) {
+      console.warn('address save failed', e)
+      throw e  // let the caller handle the error
+    }
     setAddresses((prev) => [...prev, full])
     setSelectedAddressId(full.id)
-    upsertAddress(full).catch((e) => console.warn('address save failed', e))
     return full
   }
 
-  const updateAddress = (id, patch) => {
-    const next = addresses.map((a) => (a.id === id ? { ...a, ...patch } : a))
-    setAddresses(next)
-    const updated = next.find((a) => a.id === id)
-    if (updated) upsertAddress(updated).catch((e) => console.warn('address save failed', e))
+  const updateAddress = async (id, patch) => {
+    const updated = { ...addresses.find((a) => a.id === id), ...patch }
+    if (!updated) return
+    try {
+      await ensureSession()
+      await upsertAddress(updated)
+    } catch (e) {
+      console.warn('address save failed', e)
+      throw e
+    }
+    setAddresses((prev) => prev.map((a) => (a.id === id ? updated : a)))
   }
 
-  const removeAddress = (id) => {
+  const removeAddress = async (id) => {
+    try {
+      await ensureSession()
+      await removeAddressApi(id)
+    } catch (e) {
+      console.warn('address delete failed', e)
+      throw e  // caller shows error, address stays in UI
+    }
+    // Only update local state after the server confirms deletion
     setAddresses((prev) => prev.filter((a) => a.id !== id))
     setSelectedAddressId((prev) => (prev === id ? '' : prev))
-    removeAddressApi(id).catch((e) => console.warn('address delete failed', e))
   }
 
-  const placeOrder = ({ items, total, address, payment }) => {
+  const placeOrder = async ({ items, total, subtotal, discount, coupon, tax, address, payment, serviceIds }) => {
     const order = {
       id: 'LA' + Math.floor(1000 + Math.random() * 9000),
       title: items.length > 1 ? `${items.length} items` : `${items[0]?.name || 'Order'}`,
@@ -238,6 +440,10 @@ export const AppProvider = ({ children }) => {
         amount: Number.isFinite(it.amount) ? it.amount : it.price * it.qty,
         photo: it.id ? itemPhotos[it.id] || null : null,
       })),
+      subtotal: subtotal ?? total,
+      discount: discount ?? 0,
+      coupon: coupon || null,
+      tax: tax ?? 0,
       total,
       address,
       payment,
@@ -247,41 +453,138 @@ export const AppProvider = ({ children }) => {
       review: null,
       timeline: [{ step: 'placed', time: 'Just now', note: 'Order confirmed' }],
     }
-    setOrders((prev) => [order, ...prev])
-    clearCart()
-    setItemPhotos({})
-    upsertOrder(order).catch((e) => console.warn('order save failed', e))
+
+    // Server-side placement: if a coupon is attached, use the Edge Function
+    // for atomic validation + order creation. Otherwise, direct upsert.
+    // CRITICAL: only add to local state AFTER the DB write succeeds.
+    let dbConfirmed = false
+    await ensureSession()
+    const couponCode = coupon?.code || null
+    try {
+      const serverResult = await placeOrderServer({
+        order,
+        couponCode,
+        cartTotal: subtotal ?? total,
+        serviceIds: serviceIds || [],
+      })
+      // Update order with server-confirmed values
+      if (serverResult) {
+        order.total = serverResult.total ?? order.total
+        order.discount = serverResult.discount ?? order.discount
+        order.tax = serverResult.tax ?? order.tax
+      }
+      dbConfirmed = true
+    } catch (e) {
+      // Coupon errors MUST stop the order — the Edge Function may have
+      // already created a coupon_uses row that the error response signals.
+      if (e.message && (
+        e.message.includes('coupon') ||
+        e.message.includes('already been used') ||
+        e.message.includes('Minimum order') ||
+        e.message.includes('Coupon')
+      )) {
+        throw e  // coupon errors must stop the order
+      }
+      // Non-coupon error (e.g. edge function not deployed) — fall back
+      // to direct upsert, but only for non-coupon orders. For coupon
+      // orders the Edge Function may have partially succeeded (coupon_uses
+      // created), so falling back would create an inconsistent state.
+      if (couponCode) {
+        throw new Error('Order placement failed. Please try again.')
+      }
+      console.warn('Server placement failed, falling back to direct upsert', e)
+      try {
+        await upsertOrder(order)
+        dbConfirmed = true
+      } catch (e2) {
+        console.warn('order save failed', e2)
+        throw new Error('Could not save order. Please try again.')
+      }
+    }
+
+    // Only add to local state and clear cart after DB confirms success.
+    // This prevents phantom orders that exist locally but not in the DB,
+    // which would confuse other devices on sync.
+    if (dbConfirmed) {
+      setOrders((prev) => [order, ...prev])
+      clearCart()
+      setItemPhotos({})
+    }
     return order
   }
 
   // Wipe this account's order history only — everything else is kept.
-  const clearOrders = () => {
+  // Uses soft-delete: marks every order row as hidden instead of deleting
+  // it, so payment/accounting records are preserved and other devices see
+  // the same cleared state on their next sync.
+  const clearOrders = async () => {
+    // DB-first: persist the soft-delete to the database, then update local
+    // state. This ensures other devices see the same cleared state.
+    try {
+      await ensureSession()
+      await hideAllOrders()
+    } catch (e) {
+      console.warn('orders soft-delete failed', e)
+      throw e // let the caller show an error
+    }
+    // Only clear local state after the server confirms
     setOrders([])
-    deleteAllOrders().catch((e) => console.warn('orders clear failed', e))
   }
 
-  const cancelOrder = (id) => {
-    const next = orders.map((o) =>
-      o.id === id
-        ? {
-            ...o,
-            statusKey: 'cancelled',
-            statusLabel: 'Cancelled',
-            eta: '—',
-            timeline: [...(o.timeline || []), { step: 'cancelled', time: 'Just now', note: 'Order cancelled' }],
-          }
-        : o
-    )
-    setOrders(next)
-    const changed = next.find((o) => o.id === id)
-    if (changed) upsertOrder(changed).catch((e) => console.warn('order save failed', e))
+  // Cancel an order — DB-first: persist the cancellation to the database
+  // BEFORE updating local state, so other devices see the same state.
+  // If the order used a coupon, release the coupon_uses row so the coupon
+  // becomes available again.
+  const cancelOrder = async (id) => {
+    const original = orders.find((o) => o.id === id)
+    if (!original) return
+    const cancelled = {
+      ...original,
+      statusKey: 'cancelled',
+      statusLabel: 'Cancelled',
+      eta: '—',
+      timeline: [...(original.timeline || []), { step: 'cancelled', time: 'Just now', note: 'Order cancelled' }],
+    }
+    try {
+      await ensureSession()
+      await upsertOrder(cancelled)
+    } catch (e) {
+      console.warn('order cancel failed on server', e)
+      throw e // let the caller show an error
+    }
+    // Only update local state after the server confirms
+    setOrders((prev) => prev.map((o) => (o.id === id ? cancelled : o)))
+    // Release the coupon usage so the coupon becomes available again
+    const couponCode = original.coupon?.code
+    if (couponCode) {
+      deleteCouponUse({ orderId: id }).catch((e) =>
+        console.warn('coupon use release failed', e)
+      )
+    }
   }
 
-  const rateOrder = (id, rating, comment) => {
+  const rateOrder = async (id, rating, comment) => {
     const next = orders.map((o) => (o.id === id ? { ...o, review: { rating, comment } } : o))
     setOrders(next)
+    // Ensure the Supabase session is valid before any DB write — prevents
+    // silent failures when the JWT has expired.
+    await ensureSession().catch(() => {})
+    // Save review to the dedicated reviews table — surface errors so the
+    // calling screen can notify the user if the DB write fails.
+    const errors = []
+    await upsertReview({ orderId: id, rating, comment }).catch((e) => {
+      console.warn('review save failed', e)
+      errors.push(e)
+    })
+    // Also persist the review inside the order data for offline round-trip
     const changed = next.find((o) => o.id === id)
-    if (changed) upsertOrder(changed).catch((e) => console.warn('order save failed', e))
+    if (changed) {
+      await upsertOrder(changed).catch((e) => {
+        console.warn('order save failed', e)
+        errors.push(e)
+      })
+    }
+    if (errors.length > 0) throw errors[0]
   }
 
   // Re-add an order's items to the bag. Returns number of items added (0 = nothing matched).
@@ -327,14 +630,28 @@ export const AppProvider = ({ children }) => {
     return nextLabel
   }, [orders])
 
-  const addPayMethod = (m) => {
+  const addPayMethod = async (m) => {
     const full = { id: 'pm' + Date.now().toString(36), ...m }
+    try {
+      await ensureSession()
+      await upsertPaymentMethod(full)
+    } catch (e) {
+      console.warn('payment method save failed', e)
+      throw e
+    }
     setPayMethods((prev) => [...prev, full])
     setPayMethod(full.id)
     return full
   }
 
-  const removePayMethod = (id) => {
+  const removePayMethod = async (id) => {
+    try {
+      await ensureSession()
+      await removePaymentMethodApi(id)
+    } catch (e) {
+      console.warn('payment method delete failed', e)
+      throw e
+    }
     setPayMethods((prev) => prev.filter((p) => p.id !== id))
     setPayMethod((prev) => (prev === id ? 'cod' : prev))
   }
@@ -342,23 +659,50 @@ export const AppProvider = ({ children }) => {
   // Resolved view of the selected payment method (falls back to cash on delivery)
   const selectedPay = useMemo(() => {
     if (payMethod === 'cod') return { id: 'cod', type: 'cod', label: 'Cash on delivery', icon: 'cash' }
-    return payMethods.find((p) => p.id === payMethod) || null
+    const list = Array.isArray(payMethods) ? payMethods : []
+    return list.find((p) => p && p.id === payMethod) || null
   }, [payMethod, payMethods])
 
   const updateUser = (patch) => setUser((prev) => ({ ...prev, ...patch }))
 
-  // Re-read every persisted slice from localStorage back into React state. Used
-  // by pull-to-refresh so a section re-syncs its data without a full page reload.
+  // Re-read every persisted slice from localStorage back into React state.
+  // NOTE: This should only be used for non-authed (offline) mode. When the
+  // database is available, DB is always the source of truth.
   const reloadFromStorage = useCallback(() => {
-    setUser(load('lm2_user', USER))
-    setCart(load('lm2_cart', {}))
-    setItemPhotos(load('lm2_item_photos', {}))
-    setAddresses(load('lm2_addresses_v2', []))
-    setSelectedAddressId(load('lm2_addr_id_v2', ''))
-    setPayMethods(load('lm2_pay_methods', []))
-    setPayMethod(load('lm2_pay_v2', 'cod'))
-    setOrders(load('lm2_orders_v3', []))
+    setUser(load('lm2_user', USER) || USER)
+    setCart(load('lm2_cart', {}) || {})
+    setItemPhotos(load('lm2_item_photos', {}) || {})
+    const addrs = load('lm2_addresses_v2', [])
+    setAddresses(Array.isArray(addrs) ? addrs : [])
+    setSelectedAddressId(load('lm2_addr_id_v2', '') || '')
+    const pms = load('lm2_pay_methods', [])
+    setPayMethods(Array.isArray(pms) ? pms : [])
+    setPayMethod(load('lm2_pay_v2', 'cod') || 'cod')
+    const ords = load('lm2_orders_v3', [])
+    setOrders(Array.isArray(ords) ? ords : [])
   }, [])
+
+  // Refresh all data from the database. On failure, do NOT fall back to
+  // localStorage — that would restore stale/deleted data. Instead, keep
+  // the current state and let the user retry or wait for the next sync.
+  const refreshFromDatabase = useCallback(async () => {
+    if (!authed) {
+      reloadFromStorage()
+      return
+    }
+
+    try {
+      await _fetchAndMerge()
+      // Also refresh the service catalog (public, no auth needed)
+      const serviceResult = await listServices().catch(() => null)
+      if (serviceResult && serviceResult.length) setServices(serviceResult)
+    } catch (e) {
+      console.warn('database refresh failed — keeping current state', e)
+      // Do NOT call reloadFromStorage() here — it would reintroduce
+      // stale localStorage data (e.g. deleted addresses, old orders)
+      // back into React state, which could then be synced back to the DB.
+    }
+  }, [authed, reloadFromStorage, _fetchAndMerge])
 
   const login = () => {
     localStorage.setItem('lm2_logged_in', '1')
@@ -371,10 +715,22 @@ export const AppProvider = ({ children }) => {
   }
 
   const signout = () => {
-    localStorage.removeItem('lm2_logged_in')
+    // Clear ALL app data from localStorage to prevent stale data
+    // from being re-uploaded when a different user logs in, or when
+    // the same user logs back in on a different device.
+    const keysToRemove = [
+      'lm2_logged_in', 'lm2_user', 'lm2_cart', 'lm2_item_photos',
+      'lm2_addresses_v2', 'lm2_addr_id_v2', 'lm2_pay_methods',
+      'lm2_pay_v2', 'lm2_orders_v3', 'lm2_used_coupons', 'lm2_migrated',
+    ]
+    keysToRemove.forEach((k) => localStorage.removeItem(k))
     setAuthed(false)
+    setAddresses([])
+    setSelectedAddressId('')
+    setOrders([])
     setCart({})
     setItemPhotos({})
+    setPayMethods([])
     setPayMethod('cod')
     // End the real Supabase session too (no-op when unconfigured)
     if (supabase) supabase.auth.signOut()
@@ -384,6 +740,7 @@ export const AppProvider = ({ children }) => {
     user,
     updateUser,
     reloadFromStorage,
+    refreshFromDatabase,
     services,
     cart,
     cartLines,
