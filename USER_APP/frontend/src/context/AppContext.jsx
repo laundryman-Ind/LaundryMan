@@ -475,7 +475,7 @@ export const AppProvider = ({ children }) => {
     setSelectedAddressId((prev) => (prev === id ? '' : prev))
   }
 
-  const placeOrder = async ({ items, total, subtotal, discount, coupon, tax, address, payment, serviceIds }) => {
+  const placeOrder = async ({ items, total, subtotal, discount, coupon, tax, address, customerPhone, payment, serviceIds }) => {
     const order = {
       id: 'LA' + Math.floor(1000 + Math.random() * 9000),
       title: items.length > 1 ? `${items.length} items` : `${items[0]?.name || 'Order'}`,
@@ -498,6 +498,7 @@ export const AppProvider = ({ children }) => {
       tax: tax ?? 0,
       total,
       address,
+      customerPhone: customerPhone || '',
       payment,
       rider: null,
       createdAt: 'Just now',

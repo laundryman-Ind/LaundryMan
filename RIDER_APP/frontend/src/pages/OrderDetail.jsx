@@ -2,11 +2,13 @@ import React, { useState, useEffect } from 'react'
 import { useRider } from '../context/RiderContext'
 import { getOrder, updateOrderStatus } from '../services/api'
 import Modal from '../components/Modal'
+import { FiPhone } from 'react-icons/fi'
 
 const STATUS_LABELS = {
   assigned: 'Assigned',
   pickup_started: 'Pickup Started',
   picked_up: 'Picked Up',
+  washing: 'Washing',
   processing: 'Processing',
   ready_for_delivery: 'Ready for Delivery',
   out_for_delivery: 'Out for Delivery',
@@ -17,7 +19,8 @@ const STATUS_LABELS = {
 const NEXT_ACTION = {
   assigned: { label: 'Start Pickup', next: 'pickup_started' },
   pickup_started: { label: 'Confirm Pickup', next: 'picked_up' },
-  picked_up: { label: 'Mark Processing', next: 'processing' },
+  picked_up: { label: 'Start Washing', next: 'washing' },
+  washing: { label: 'Mark Processing', next: 'processing' },
   processing: { label: 'Mark Ready', next: 'ready_for_delivery' },
   ready_for_delivery: { label: 'Start Delivery', next: 'out_for_delivery' },
   out_for_delivery: { label: 'Confirm Delivery', next: 'delivered' },
@@ -119,16 +122,53 @@ const OrderDetail = ({ navigate, notify, params }) => {
         <>
           <div className="section-label"><h3>Pickup Address</h3></div>
           <div className="cell" style={{ marginBottom: '14px' }}>
-            <div style={{ fontSize: '14px', fontWeight: 600 }}>{order.address.line || order.address.label || '—'}</div>
+            <div style={{ fontSize: '14px', fontWeight: 600 }}>
+              {typeof order.address === 'string' ? order.address : (order.address.line || order.address.label || '—')}
+            </div>
           </div>
         </>
       )}
 
-      {order.deliveryAddress && (
+      {(order.deliveryAddress || order.address) && (
         <>
           <div className="section-label"><h3>Delivery Address</h3></div>
           <div className="cell" style={{ marginBottom: '14px' }}>
-            <div style={{ fontSize: '14px', fontWeight: 600 }}>{order.deliveryAddress.line || order.deliveryAddress.label || '—'}</div>
+            <div style={{ fontSize: '14px', fontWeight: 600 }}>
+              {(() => {
+                const addr = order.deliveryAddress || order.address
+                if (typeof addr === 'string') return addr
+                return addr.line || addr.label || '—'
+              })()}
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* Customer Phone */}
+      {order.customerPhone && (
+        <>
+          <div className="section-label"><h3>Customer Phone</h3></div>
+          <div className="cell" style={{ marginBottom: '14px' }}>
+            <div className="spread" style={{ alignItems: 'center' }}>
+              <div style={{ fontSize: '14px', fontWeight: 600 }}>{order.customerPhone}</div>
+              <a
+                href={`tel:${order.customerPhone.replace(/\D/g, '')}`}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  padding: '10px 18px',
+                  background: '#2540FF',
+                  color: '#fff',
+                  borderRadius: '12px',
+                  fontWeight: 700,
+                  fontSize: '14px',
+                  textDecoration: 'none',
+                }}
+              >
+                <FiPhone size={16} /> Call Customer
+              </a>
+            </div>
           </div>
         </>
       )}

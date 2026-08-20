@@ -155,6 +155,7 @@ export const acceptOrder = async (orderId) => {
     const updatedData = {
       ...row.data,
       statusKey: 'assigned',
+      statusLabel: statusLabel('assigned'),
       riderId: rider.id,
       assignedAt: now,
       rider: {
@@ -163,7 +164,11 @@ export const acceptOrder = async (orderId) => {
         phone: rider.phone || '',
         phoneHref: rider.phone_href || `tel:${rider.phone || ''}`,
         photo: rider.photo || '',
-      }
+      },
+      timeline: [
+        ...(row.data.timeline || []),
+        { step: 'assigned', time: 'Just now', note: statusNote('assigned') },
+      ],
     }
     await supabase.from(ORDERS).update({ data: updatedData }).eq('id', orderId)
   }
@@ -191,6 +196,7 @@ export const updateOrderStatus = async (orderId, newStatus) => {
     const updatedData = {
       ...row.data,
       statusKey: newStatus,
+      statusLabel: statusLabel(newStatus),
       timeline: [
         ...(row.data.timeline || []),
         { step: newStatus, time: 'Just now', note: statusNote(newStatus) },
@@ -215,14 +221,86 @@ export const subscribeOrders = (callback) => {
   return () => { supabase.removeChannel(channel) }
 }
 
+// --- GPS Tracking ---
+
+// Update rider's current location in the database
+export const updateRiderLocation = async (lat, lng) => {
+  if (!isSupabaseConfigured) return null
+  const user = await currentUser()
+  if (!user) return null
+  
+  // Get rider id
+  const { data: rider } = await supabase
+    .from(RIDERS)
+    .select('id')
+    .eq('user_id', user.id)
+    .maybeSingle()
+  if (!rider) return null
+  
+  const now = new Date().toISOString()
+  const { error } = await supabase
+    .from('rider_locations')
+    .upsert({
+      rider_id: rider.id,
+      lat,
+      lng,
+      updated_at: now,
+    }, { onConflict: 'rider_id' })
+  if (error) throw new Error(hint(error))
+  return true
+}
+
+// Get a rider's current location by rider_id
+export const getRiderLocation = async (riderId) => {
+  if (!isSupabaseConfigured) return null
+  const { data, error } = await supabase
+    .from('rider_locations')
+    .select('*')
+    .eq('rider_id', riderId)
+    .maybeSingle()
+  if (error) return null
+  return data
+}
+
+// Subscribe to a specific rider's location changes (realtime)
+export const subscribeRiderLocation = (riderId, callback) => {
+  if (!isSupabaseConfigured || !supabase || !riderId) return () => {}
+  const channel = supabase
+    .channel(`rider-location-${riderId}`)
+    .on(
+      'postgres_changes',
+      { event: '*', schema: 'public', table: 'rider_locations', filter: `rider_id=eq.${riderId}` },
+      (payload) => {
+        callback(payload)
+      }
+    )
+    .subscribe()
+  return () => { supabase.removeChannel(channel) }
+}
+
 // --- Helpers ---
+
+const statusLabel = (status) => {
+  const labels = {
+    assigned: 'Assigned',
+    pickup_started: 'Pickup started',
+    picked_up: 'Picked up',
+    washing: 'Washing',
+    processing: 'Processing',
+    ready_for_delivery: 'Ready for delivery',
+    out_for_delivery: 'Out for delivery',
+    delivered: 'Delivered',
+  }
+  return labels[status] || status
+}
 
 const statusNote = (status) => {
   const notes = {
     assigned: 'Order assigned to rider',
     pickup_started: 'Rider is on the way to pick up',
     picked_up: 'Items picked up from customer',
-    processing: 'Items being processed',
+    washing: 'Washing in progress',
+    processing: 'Quality check & packing',
     ready_for_delivery: 'Items ready for delivery',
     out_for_delivery: 'Rider is on the way to deliver',
     delivered: 'Order delivered successfully',

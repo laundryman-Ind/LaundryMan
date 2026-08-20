@@ -251,6 +251,7 @@ const Checkout = ({ navigate, notify, back }) => {
         coupon: selectedCoupon ? { code: selectedCoupon.code, title: selectedCoupon.title, type: selectedCoupon.type, value: selectedCoupon.value } : null,
         tax: Math.round(gstAmount),
         address: `${address.label || 'Delivery'} — ${address.line || ''}`,
+        customerPhone: address.phone || user?.phone || '',
         payment: selectedPay?.label || 'Cash on delivery',
         serviceIds: Array.from(serviceIdSet),
       })

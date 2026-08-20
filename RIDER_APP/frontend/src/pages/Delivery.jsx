@@ -3,13 +3,18 @@ import { useRider } from '../context/RiderContext'
 import { getOrder, updateOrderStatus } from '../services/api'
 import Icon from '../components/Icon'
 
+const GPS_STATUS_LABELS = {
+  pickup_started: 'On the way to pick up',
+  out_for_delivery: 'Delivering to customer',
+}
+
 const ACTIONS = {
   ready_for_delivery: { label: 'Start Delivery', next: 'out_for_delivery' },
   out_for_delivery: { label: 'Confirm Delivery', next: 'delivered' },
 }
 
 const Delivery = ({ navigate, notify, params }) => {
-  const { ensureSession } = useRider()
+  const { ensureSession, gpsLocation, gpsError, isTracking } = useRider()
   const [order, setOrder] = useState(null)
   const [loading, setLoading] = useState(true)
   const [updating, setUpdating] = useState(false)
@@ -62,12 +67,52 @@ const Delivery = ({ navigate, notify, params }) => {
         </div>
       </div>
 
-      {order.deliveryAddress && (
+      {/* GPS Tracking Status */}
+      {isTracking && (
+        <div className="cell" style={{ marginBottom: '14px', backgroundColor: '#e8f5e9' }}>
+          <div className="spread">
+            <div>
+              <div className="oc-id" style={{ color: '#2e7d32' }}>GPS TRACKING ACTIVE</div>
+              <div style={{ fontSize: '13px', fontWeight: 600, marginTop: '4px', color: '#388e3c' }}>
+                {GPS_STATUS_LABELS[order.statusKey] || 'Tracking your location'}
+              </div>
+            </div>
+            <div className="gps-status">
+              <Icon name="location" style={{ width: '16px', height: '16px', color: '#2e7d32' }} />
+            </div>
+          </div>
+          {gpsLocation && (
+            <div style={{ fontSize: '11px', color: '#666', marginTop: '8px' }}>
+              Lat: {gpsLocation.lat.toFixed(6)}, Lng: {gpsLocation.lng.toFixed(6)}
+            </div>
+          )}
+          {gpsError && (
+            <div style={{ fontSize: '11px', color: '#c62828', marginTop: '8px' }}>
+              {gpsError}
+            </div>
+          )}
+        </div>
+      )}
+      
+      {!isTracking && order && order.statusKey !== 'delivered' && order.statusKey !== 'cancelled' && (
+        <div className="cell" style={{ marginBottom: '14px', backgroundColor: '#fff3e0' }}>
+          <div className="oc-id" style={{ color: '#e65100' }}>GPS TRACKING INACTIVE</div>
+          <div style={{ fontSize: '13px', fontWeight: 600, marginTop: '4px', color: '#ef6c00' }}>
+            Location sharing is off
+          </div>
+        </div>
+      )}
+
+      {(order.deliveryAddress || order.address) && (
         <div className="cell" style={{ marginBottom: '14px' }}>
           <div className="oc-id">DELIVERY ADDRESS</div>
           <div style={{ fontSize: '14px', fontWeight: 600, marginTop: '4px' }}>
             <Icon name="location" style={{ width: '14px', height: '14px', display: 'inline', verticalAlign: '-2px', marginRight: '6px' }} />
-            {order.deliveryAddress.line || order.deliveryAddress.label || '—'}
+            {(() => {
+              const addr = order.deliveryAddress || order.address
+              if (typeof addr === 'string') return addr
+              return addr.line || addr.label || '—'
+            })()}
           </div>
         </div>
       )}

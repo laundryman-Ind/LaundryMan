@@ -104,6 +104,7 @@ export const PAYMENT_METHODS = ['UPI', 'Debit card', 'Credit card', 'Cash on del
 // Horizontal progress tracker (Home / active order)
 export const TRACK_STEPS = [
   { key: 'placed', label: 'Placed', icon: 'bag' },
+  { key: 'assigned', label: 'Assigned', icon: 'check' },
   { key: 'picked', label: 'Picked up', icon: 'check' },
   { key: 'washing', label: 'Washing', icon: 'shirt' },
   { key: 'processing', label: 'Processing', icon: 'star' },
@@ -111,37 +112,75 @@ export const TRACK_STEPS = [
 ]
 
 // Full order lifecycle (vertical timeline)
+// Maps rider status keys to timeline steps
 export const STATUS_FLOW = [
   { key: 'placed', label: 'Order placed', icon: 'bag' },
+  { key: 'assigned', label: 'Assigned to rider', icon: 'check' },
+  { key: 'pickup_started', label: 'Pickup started', icon: 'check' },
   { key: 'picked_up', label: 'Picked up', icon: 'check' },
   { key: 'washing', label: 'Washing', icon: 'shirt' },
   { key: 'processing', label: 'Processing', icon: 'star' },
+  { key: 'ready_for_delivery', label: 'Ready for delivery', icon: 'star' },
   { key: 'delivery', label: 'Out for delivery', icon: 'truck' },
+  { key: 'out_for_delivery', label: 'Out for delivery', icon: 'truck' },
   { key: 'delivered', label: 'Delivered', icon: 'check' },
 ]
 
-export const TRACK_ACTIVE = { placed: 1, picked_up: 2, washing: 3, processing: 4, delivery: 5, delivered: 6, cancelled: 0 }
-export const TRACK_FILL = { placed: 8, picked_up: 25, washing: 50, processing: 75, delivery: 100, delivered: 100, cancelled: 0 }
+// Map rider status keys to timeline step indices for progress tracking
+export const STATUS_TO_FLOW_INDEX = {
+  placed: 0,
+  assigned: 1,
+  pickup_started: 2,
+  picked_up: 3,
+  washing: 4,
+  processing: 5,
+  ready_for_delivery: 6,
+  delivery: 7,
+  out_for_delivery: 7,
+  delivered: 9,
+}
 
-export const ACTIVE_STATUSES = ['placed', 'picked_up', 'washing', 'processing', 'delivery']
-export const CANCELLABLE_STATUSES = ['placed'] // cancellable only until the rider has picked the bag up
+export const TRACK_ACTIVE = {
+  // active = number of TRACK_STEPS whose dot should be filled blue (i < active)
+  // Steps: 0=Placed, 1=Assigned, 2=Picked up, 3=Washing, 4=Processing, 5=Delivery
+  placed: 1, assigned: 2, pickup_started: 2, picked_up: 3,
+  washing: 4, processing: 5, ready_for_delivery: 5, delivery: 6, out_for_delivery: 6,
+  delivered: 6, cancelled: 0,
+}
+export const TRACK_FILL = {
+  // fill = width % of the progress line between dots
+  placed: 8, assigned: 20, pickup_started: 20, picked_up: 35,
+  washing: 55, processing: 75, ready_for_delivery: 75, delivery: 100, out_for_delivery: 100,
+  delivered: 100, cancelled: 0,
+}
+
+export const ACTIVE_STATUSES = ['placed', 'assigned', 'pickup_started', 'picked_up', 'washing', 'processing', 'ready_for_delivery', 'delivery', 'out_for_delivery']
+export const CANCELLABLE_STATUSES = ['placed', 'assigned'] // cancellable only until the rider starts pickup
 
 export const STATUS_LABELS = {
   placed: 'Placed',
+  assigned: 'Assigned',
+  pickup_started: 'Pickup started',
   picked_up: 'Picked up',
   washing: 'In washing',
   processing: 'Processing',
+  ready_for_delivery: 'Ready for delivery',
   delivery: 'Out for delivery',
+  out_for_delivery: 'Out for delivery',
   delivered: 'Delivered',
   cancelled: 'Cancelled',
 }
 
 export const STATUS_NOTES = {
   placed: 'Order confirmed',
+  assigned: 'Order assigned to rider',
+  pickup_started: 'Rider is on the way to pick up',
   picked_up: 'Bag picked up from your door',
   washing: 'Wash in progress',
   processing: 'Quality check & packing',
+  ready_for_delivery: 'Items ready for delivery',
   delivery: 'Out for delivery',
+  out_for_delivery: 'Rider is on the way to deliver',
   delivered: 'Delivered · OTP verified',
 }
 

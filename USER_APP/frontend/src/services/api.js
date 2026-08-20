@@ -779,3 +779,35 @@ export const removePaymentMethod = async (pmId) => {
   if (error) throw new Error(hint(error))
   return true
 }
+
+// ---------------------------------------------------------------------------
+// RIDER GPS TRACKING — real-time location for order tracking.
+// ---------------------------------------------------------------------------
+
+// Get a rider's current location by rider_id
+export const getRiderLocation = async (riderId) => {
+  if (!isSupabaseConfigured || !riderId) return null
+  const { data, error } = await supabase
+    .from('rider_locations')
+    .select('*')
+    .eq('rider_id', riderId)
+    .maybeSingle()
+  if (error) return null
+  return data
+}
+
+// Subscribe to a specific rider's location changes (realtime)
+export const subscribeRiderLocation = (riderId, callback) => {
+  if (!isSupabaseConfigured || !supabase || !riderId) return () => {}
+  const channel = supabase
+    .channel(`rider-location-${riderId}`)
+    .on(
+      'postgres_changes',
+      { event: '*', schema: 'public', table: 'rider_locations', filter: `rider_id=eq.${riderId}` },
+      (payload) => {
+        callback(payload)
+      }
+    )
+    .subscribe()
+  return () => { supabase.removeChannel(channel) }
+}

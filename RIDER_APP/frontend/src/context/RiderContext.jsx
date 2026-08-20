@@ -3,6 +3,7 @@ import { supabase, isSupabaseConfigured, isBetaAuth } from '../services/supabase
 import { createBetaSession } from '../services/betaAuth'
 import { currentUser, getRiderProfile, setRiderOnline, subscribeOrders, listMyOrders } from '../services/api'
 import { formatPhone } from '../services/phone'
+import useGpsTracking from '../hooks/useGpsTracking'
 
 const RiderContext = createContext()
 export const useRider = () => useContext(RiderContext)
@@ -15,6 +16,10 @@ export const RiderProvider = ({ children }) => {
   const [online, setOnline] = useState(() => rider?.active || false)
   const [myOrders, setMyOrders] = useState([])
   const [activeOrder, setActiveOrder] = useState(null)
+  
+  // GPS tracking — enabled when rider has an active order
+  const hasActiveOrder = !!activeOrder && activeOrder.statusKey !== 'delivered' && activeOrder.statusKey !== 'cancelled'
+  const { location: gpsLocation, error: gpsError, isTracking } = useGpsTracking(hasActiveOrder, rider?.id)
 
   // Ensure session
   const ensureSession = useCallback(async () => {
@@ -137,6 +142,7 @@ export const RiderProvider = ({ children }) => {
   const value = {
     authed, rider, online,
     myOrders, activeOrder,
+    gpsLocation, gpsError, isTracking,
     login, logout, toggleOnline,
     loadProfile, refreshOrders,
     ensureSession,

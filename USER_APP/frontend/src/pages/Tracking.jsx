@@ -1,6 +1,6 @@
-import React, { useState } from 'react'
+import React, { useState, useEffect } from 'react'
 import { useApp } from '../context/AppContext'
-import { formatPrice, STATUS_FLOW, TRACK_ACTIVE, CANCELLABLE_STATUSES, RIDER } from '../data/mockData'
+import { formatPrice, STATUS_FLOW, STATUS_TO_FLOW_INDEX, TRACK_ACTIVE, CANCELLABLE_STATUSES, RIDER } from '../data/mockData'
 import Icon from '../components/Icon'
 import Photo from '../components/Photo'
 import PageHeader from '../components/PageHeader'
@@ -9,6 +9,7 @@ import TrackingMap from '../components/TrackingMap'
 import Modal from '../components/Modal'
 import { useScrollLock, useSwipeDismiss } from '../utils/popup'
 import { generateInvoicePdf } from '../services/invoice'
+import { getRiderLocation, subscribeRiderLocation } from '../services/api'
 
 const TIP_AMOUNTS = [20, 50, 100, 200]
 
@@ -17,7 +18,30 @@ const Tracking = ({ navigate, params, notify }) => {
   const [confirmCancel, setConfirmCancel] = useState(false)
   const [tipOpen, setTipOpen] = useState(false)
   const [tip, setTip] = useState(50)
+  const [liveRiderCoords, setLiveRiderCoords] = useState(null)
   const order = orders.find((o) => o.id === params?.orderId) || null
+  
+  // Subscribe to rider's live location for real-time tracking
+  useEffect(() => {
+    if (!order?.riderId) return
+    
+    // Get initial location
+    getRiderLocation(order.riderId).then((loc) => {
+      if (loc) {
+        setLiveRiderCoords({ lat: loc.lat, lng: loc.lng })
+      }
+    }).catch(() => {})
+    
+    // Subscribe to real-time updates
+    const unsub = subscribeRiderLocation(order.riderId, (payload) => {
+      const newLoc = payload.new
+      if (newLoc) {
+        setLiveRiderCoords({ lat: newLoc.lat, lng: newLoc.lng })
+      }
+    })
+    
+    return unsub
+  }, [order?.riderId])
 
   // Tip sheet behaves like every other popup: background scroll locked, swipe down to dismiss.
   useScrollLock(tipOpen)
@@ -45,11 +69,14 @@ const Tracking = ({ navigate, params, notify }) => {
   const lastReached = cancelled
     ? (events.filter((e) => e.step !== 'cancelled').pop()?.step || null)
     : order.statusKey
+  // STATUS_TO_FLOW_INDEX maps status → index in STATUS_FLOW.
+  // reachedIdx is the exclusive end (slice bound), so add +1.
+  // currentIdx = reachedIdx - 1 points to the actual current step.
   const reachedIdx = cancelled
-    ? (lastReached ? STATUS_FLOW.findIndex((s) => s.key === lastReached) + 1 : 0)
-    : (TRACK_ACTIVE[order.statusKey] ?? 0)
+    ? (lastReached ? (STATUS_TO_FLOW_INDEX[lastReached] ?? 0) + 1 : 0)
+    : ((STATUS_TO_FLOW_INDEX[order.statusKey] ?? TRACK_ACTIVE[order.statusKey] ?? 0) + 1)
   const currentIdx = reachedIdx - 1
-  const flow = cancelled ? STATUS_FLOW.slice(0, reachedIdx) : STATUS_FLOW
+  const flow = STATUS_FLOW.slice(0, reachedIdx)
 
   // Rider assigned to this order. Live tracking / contact only make
   // sense while the order is on the move — hidden once delivered or cancelled.
@@ -67,11 +94,15 @@ const Tracking = ({ navigate, params, notify }) => {
     }
   }
   const riderStatus = {
-    placed: 'Rider is on the way to pick up your order',
+    placed: 'Order confirmed — waiting for rider',
+    assigned: 'Rider is on the way to pick up your order',
+    pickup_started: 'Rider is heading to your location',
     picked_up: 'Bag picked up — heading to the laundry',
     washing: 'Your clothes are being washed',
     processing: 'Quality check & packing in progress',
+    ready_for_delivery: 'Items ready — waiting for rider',
     delivery: 'Rider is on the way with your order',
+    out_for_delivery: 'Rider is on the way with your order',
   }[order.statusKey] || 'Rider is on the way'
 
   return (
@@ -86,8 +117,8 @@ const Tracking = ({ navigate, params, notify }) => {
         <h2 style={{ fontSize: 30 }}>{order.title}</h2>
       </div>
 
-      {/* RIDER GPS TRACKER — live map, shown before the activity timeline */}
-      {!delivered && !cancelled && (
+      {/* RIDER GPS TRACKER — live map, shown only after a rider accepts the order */}
+      {!delivered && !cancelled && order.riderId && (
         <div className="summary-card" style={{ marginBottom: 11 }}>
           <div className="spread">
             <div className="sec-title" style={{ margin: 0 }}>Rider GPS Tracker</div>
@@ -96,7 +127,7 @@ const Tracking = ({ navigate, params, notify }) => {
           <TrackingMap
             pickup={order.pickupCoords}
             delivery={order.deliveryCoords}
-            rider={order.riderCoords}
+            rider={liveRiderCoords || order.riderCoords}
             statusKey={order.statusKey}
           />
           <div className="kv" style={{ marginTop: 12 }}><span>Rider status</span><strong>{riderStatus}</strong></div>
@@ -146,10 +177,7 @@ const Tracking = ({ navigate, params, notify }) => {
         <div className="summary-card" style={{ marginBottom: 11 }}>
           <TrackTimeline statusKey={order.statusKey} />
           <div className="kv"><span>Estimated delivery</span><strong>{order.eta}</strong></div>
-          <div className="kv"><span>One-time OTP</span><strong className="mono">••••</strong></div>
-          <p className="note" style={{ textAlign: 'left', margin: '10px 0 0' }}>
-            Your rider shares a single OTP for both pickup and delivery. Never share it with anyone else.
-          </p>
+          {/* OTP section — hidden for now, will be enabled later */}
         </div>
       )}
 
