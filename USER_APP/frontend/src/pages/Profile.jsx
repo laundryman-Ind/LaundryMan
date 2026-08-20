@@ -14,10 +14,9 @@ import { useScrollLock, useSwipeDismiss } from '../utils/popup'
 import { upsertProfile, deleteAccount as deleteAccountApi, isBackendReady } from '../services/api'
 
 const Profile = ({ navigate, notify }) => {
-  const { user, payMethod, payMethods, updateUser, signout, orders, clearOrders } = useApp()
+  const { user, payMethod, payMethods, updateUser, signout, orders } = useApp()
   const stats = useActivityStats()
   const [confirmOut, setConfirmOut] = useState(false)
-  const [confirmClear, setConfirmClear] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [editOpen, setEditOpen] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -181,11 +180,6 @@ const Profile = ({ navigate, notify }) => {
       </div>
 
       <div style={{ height: 20 }} />
-      {orders.length > 0 && (
-        <button className="btn btn-ghost" onClick={() => setConfirmClear(true)} style={{ marginBottom: 12 }}>
-          <Icon name="trash" style={{ width: 16, height: 16 }} /> Clear order history
-        </button>
-      )}
       <button className="btn btn-ghost" onClick={() => setConfirmOut(true)}>
         <Icon name="power" style={{ width: 16, height: 16 }} /> Sign out
       </button>
@@ -204,25 +198,7 @@ const Profile = ({ navigate, notify }) => {
         onClose={() => setConfirmOut(false)}
       />
 
-      {/* CLEAR ORDER HISTORY — this account only (swipe-down to dismiss applies to every popup in the APK) */}
-      <Modal
-        open={confirmClear}
-        title="Clear order history?"
-        text="This hides all orders from your view on every device. Your profile, saved addresses and payment methods are kept. Order records are preserved for accounting."
-        confirmLabel="Clear history"
-        danger
-        onConfirm={async () => {
-          try {
-            await clearOrders()
-            setConfirmClear(false)
-            notify('Order history cleared')
-          } catch {
-            setConfirmClear(false)
-            notify('Could not clear history — try again')
-          }
-        }}
-        onClose={() => setConfirmClear(false)}
-      />
+
 
       {/* EDIT PROFILE SHEET */}
       {editOpen && (

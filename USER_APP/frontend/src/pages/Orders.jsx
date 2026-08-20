@@ -27,16 +27,13 @@ const EMPTY_STATES = {
   cancelled: { icon: 'x', title: 'No cancelled orders', text: 'Orders you cancel will show up here for reference.', cta: 'Browse Services →' },
 }
 
-const DEMO_TICK_MS = 8000
-
 const Orders = ({ navigate, notify, registerRefresh }) => {
-  const { orders, activeOrder, cancelOrder, reorder, rateOrder, advanceActiveOrder, cartCount, refreshFromDatabase } = useApp()
+  const { orders, activeOrder, cancelOrder, reorder, rateOrder, cartCount, refreshFromDatabase } = useApp()
   const [filter, setFilter] = useState('all')
   const [reviewTarget, setReviewTarget] = useState(null)
   const [rating, setRating] = useState(0)
   const [comment, setComment] = useState('')
   const [cancelTarget, setCancelTarget] = useState(null)
-  const [demo, setDemo] = useState(false)
 
   // APK only: lock the page behind the review sheet + swipe down anywhere to close.
   useScrollLock(!!reviewTarget)
@@ -51,7 +48,6 @@ const Orders = ({ navigate, notify, registerRefresh }) => {
     registerRefresh(async () => {
       await refreshFromDatabase()
       setFilter('all')
-      setDemo(false)
       setReviewTarget(null)
       setCancelTarget(null)
       notify('Orders refreshed')
@@ -59,33 +55,7 @@ const Orders = ({ navigate, notify, registerRefresh }) => {
     return () => registerRefresh(null)
   }, [registerRefresh, refreshFromDatabase, notify])
 
-  // Live demo: advance the active order's status on a timer.
-  useEffect(() => {
-    if (!demo) return
-    const id = setInterval(() => {
-      const label = advanceActiveOrder()
-      if (!label) {
-        setDemo(false)
-        notify('All orders delivered — demo finished 🎉')
-      } else {
-        notify(`Status → ${label}`)
-      }
-    }, DEMO_TICK_MS)
-    return () => clearInterval(id)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [demo, advanceActiveOrder])
 
-  const toggleDemo = () => {
-    if (demo) {
-      setDemo(false)
-      notify('Demo paused')
-      return
-    }
-    const label = advanceActiveOrder()
-    if (!label) return notify('No active orders to simulate')
-    setDemo(true)
-    notify(`Demo on — status → ${label}`)
-  }
 
   const counts = useMemo(
     () => ({
@@ -160,13 +130,7 @@ const Orders = ({ navigate, notify, registerRefresh }) => {
         }
       />
 
-      {/* LIVE DEMO TOGGLE */}
-      <div className="demo-row">
-        <button className={`live-toggle ${demo ? 'on' : ''}`} onClick={toggleDemo}>
-          <span className="live-dot" />
-          {demo ? 'Demo running — advancing every 8s' : 'Play live status demo'}
-        </button>
-      </div>
+
 
       {/* FILTERS */}
       <div className="chip-row">
