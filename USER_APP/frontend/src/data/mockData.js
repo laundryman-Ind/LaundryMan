@@ -148,7 +148,7 @@ export const STATUS_NOTES = {
 // Orders are created at runtime via placeOrder() — no seed history.
 // Swap placeOrder/advanceActiveOrder for a real API later (order shape stays the same).
 
-export const USER = { name: 'Alex', phone: '+91 98765 43210' }
+export const USER = { name: 'Alex', phone: '+91 98765 43210', photo: null }
 
 // ---------- RIDER ----------
 // Assigned delivery partner for live tracking, contact & tipping (mock).

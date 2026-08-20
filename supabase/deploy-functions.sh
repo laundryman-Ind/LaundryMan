@@ -21,8 +21,11 @@ supabase link --project-ref "$SUPABASE_PROJECT_REF"
 echo "2/3 Setting service-role secret..."
 supabase secrets set SUPABASE_SERVICE_ROLE_KEY="$SUPABASE_SERVICE_ROLE_KEY"
 
-echo "3/3 Deploying delete-account..."
+echo "3/4 Deploying delete-account..."
 supabase functions deploy delete-account
 
+echo "4/4 Deploying place-order..."
+supabase functions deploy place-order
+
 echo ""
-echo "Done. The app calls it at /functions/v1/delete-account automatically."
+echo "Done. Edge Functions delete-account and place-order deployed successfully."

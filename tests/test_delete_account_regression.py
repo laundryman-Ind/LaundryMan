@@ -9,4 +9,4 @@ schema = (root / 'supabase/schema.sql').read_text(encoding='utf-8')
 assert "'addresses'" in func, 'delete-account edge function must remove saved addresses'
 assert ".eq('user_id', user.id)" in func, 'address cleanup must target the signed-in user'
 assert '.delete()' in func, 'delete-account must call .delete()'
-assert 'on delete cascade' in schema, 'address FK should cascade on user deletion'
+assert 'on delete cascade' in schema.lower(), 'address FK should cascade on user deletion'

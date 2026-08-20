@@ -59,7 +59,9 @@ The priority is to make the complete application workflow work.
 - [x] Profile screen
 - [x] Profile CRUD
 - [x] Edit profile (name, phone, avatar)
-- [x] Delete account server-side cleanup via Supabase Edge Function (`delete-account`)
+- [x] Complete profile photo deletion & local state reset (no photo bleeding into new profiles)
+- [x] Delete account server-side cleanup via Supabase Edge Function (`delete-account`) and `delete_own_account` PostgreSQL RPC
+- [x] Cross-device account deletion synchronization (realtime subscription, multi-tab sync, and automatic signout when profile is deleted on another device)
 - [x] Delete account clears local stored app data & Supabase Auth user
 - [x] Soft-delete order history ("Clear order history" hides rows from user view while preserving accounting records)
 - [x] Profile testing on physical device
@@ -105,8 +107,9 @@ The priority is to make the complete application workflow work.
 - [x] Save order total and payment method
 - [x] Interactive checkout coupon section
 - [x] Real database coupon catalog from Supabase `coupons` table
-- [x] Coupon eligibility checks (min total, service type matching)
-- [x] Single-use coupon enforcement with Supabase `coupon_uses` table
+- [x] Coupon eligibility checks (min total, service type matching, free delivery coupon support)
+- [x] Single-use coupon enforcement with Supabase `coupon_uses` table and `redeem_coupon` RPC
+- [x] Robust order placement with atomic RPC fallback when Edge functions are unconfigured
 - [x] Test complete order creation on physical device
 
 ## User Order Tracking & Invoicing
@@ -366,6 +369,8 @@ Required beta database work:
 - [x] `notifications` table with RLS
 - [x] `push_tokens` table with RLS
 - [x] Server-side Edge Function: `delete-account` (service role JWT verification & auth user deletion)
+- [x] PostgreSQL RPC `delete_own_account()` and RLS DELETE policy for atomic multi-table account wipe
+- [x] PostgreSQL RPC `redeem_coupon()` with atomic single-use locking & discount computation
 - [x] Soft-delete order history mechanism (`hiddenAt` timestamp in jsonb)
 - [ ] Direct `rider_id` column and assignment timestamps on orders table
 - [ ] Rider location live tracking updates in database
@@ -377,9 +382,9 @@ Required beta database work:
 - [x] Remove demo-mode behavior that prevents real Supabase testing
 - [x] Replace fake order creation with real database operations (`orders` table)
 - [x] Replace fake order status with real database status
-- [x] Cross-device sync on app foregrounding (`visibilitychange` listener)
+- [x] Cross-device sync on app foregrounding (`visibilitychange` listener), periodic polling, and realtime change events
 - [x] Full review & rating system connected to Supabase `reviews` table
-- [x] Coupon system integrated with Supabase catalog & single-use tracking
+- [x] Coupon system integrated with Supabase catalog, single-use tracking & free delivery coupon support
 - [x] MapLibre live GPS tracking component integrated for order tracking (`TrackingMap.jsx`)
 - [x] A4 PDF Invoice generation (`pdfmake`) with custom native Android download plugin (`InvoiceDownloaderPlugin.java`) to `Documents/LaundryMan/invoice`
 - [x] Remove tracking demo toggle

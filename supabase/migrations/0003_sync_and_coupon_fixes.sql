@@ -69,7 +69,7 @@ BEGIN
   -- 1) Look up the coupon
   SELECT * INTO v_coupon
   FROM public.coupons
-  WHERE code = UPPER(TRIM(p_coupon_code))
+  WHERE UPPER(TRIM(code)) = UPPER(TRIM(p_coupon_code))
     AND active = true
   FOR UPDATE;  -- lock the row to prevent concurrent reads
 

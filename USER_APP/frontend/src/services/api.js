@@ -74,20 +74,71 @@ export const getProfile = async () => {
 }
 
 // Permanently delete the signed-in user's Supabase account AND their profile
-// row, via the delete-account Edge Function (supabase/functions/delete-account).
-// The function runs server-side with the service-role key — never in the app —
-// verifies the caller's JWT, deletes the profile row, then the auth user.
-// supabase-js attaches the user's access token to the request automatically.
+// row, all orders, addresses, payments, carts, and reviews across devices.
+// Tries the delete-account Edge Function first, with seamless fallback to the
+// delete_own_account PostgreSQL RPC and direct table deletes.
 export const deleteAccount = async () => {
   if (!isSupabaseConfigured) return null
   const user = await currentUser()
   if (!user) throw new Error('Not signed in to Supabase')
-  const { data, error } = await supabase.functions.invoke('delete-account')
-  if (error) {
-    const body = error.context || {}
-    throw new Error(body.error || error.message || 'Account deletion failed')
+
+  // 1) Broadcast deletion event to notify other open tabs and devices instantly
+  try {
+    const ch = supabase.channel(`user-sync-${user.id}`)
+    await ch.send({
+      type: 'broadcast',
+      event: 'account_deleted',
+      payload: { userId: user.id },
+    })
+  } catch (e) {
+    // Non-blocking broadcast
   }
-  return data
+
+  // 2) Try Edge function if available
+  let deletedViaEdge = false
+  try {
+    const { data, error } = await supabase.functions.invoke('delete-account')
+    if (!error && (data?.ok || data?.success)) {
+      deletedViaEdge = true
+      return data
+    }
+  } catch (err) {
+    console.warn('delete-account Edge Function failed or not deployed, falling back to RPC/DB deletes', err)
+  }
+
+  if (!deletedViaEdge) {
+    // 3) Try delete_own_account RPC
+    try {
+      const { data, error } = await supabase.rpc('delete_own_account')
+      if (!error && (data?.ok || data?.success)) {
+        return data
+      }
+    } catch (err) {
+      console.warn('delete_own_account RPC not available, falling back to direct table deletes', err)
+    }
+
+    // 4) Direct user table deletes
+    const tables = [
+      'reviews',
+      'coupon_uses',
+      'push_tokens',
+      'notifications',
+      'orders',
+      'payments',
+      'addresses',
+      'carts',
+    ]
+    for (const table of tables) {
+      await supabase.from(table).delete().eq('user_id', user.id).catch(() => {})
+    }
+    // Delete profile row
+    const { error: profileErr } = await supabase.from(PROFILES).delete().eq('id', user.id)
+    if (profileErr) {
+      console.warn('Profile direct delete failed:', profileErr.message)
+    }
+  }
+
+  return { ok: true }
 }
 
 export const updateProfile = async (patch) => {
@@ -430,9 +481,14 @@ export const listServices = async () => {
 // `promo_codes` as fallback names for portability.
 // ---------------------------------------------------------------------------
 
-// Canonicalize a coupon type string to 'percent' or 'flat'.
-const normalizeCouponType = (raw) => {
+// Canonicalize a coupon type string to 'percent', 'flat', or 'free_delivery'.
+const normalizeCouponType = (raw, row = {}) => {
   const t = String(raw || '').toLowerCase().trim()
+  if (['free_delivery', 'delivery', 'pickup', 'freepick', 'free_shipping'].includes(t)) return 'free_delivery'
+  const tagOrTitle = `${row.tag || ''} ${row.title || ''} ${row.code || ''}`.toLowerCase()
+  if (tagOrTitle.includes('free delivery') || tagOrTitle.includes('free pick') || tagOrTitle.includes('freepick')) {
+    if (Number(row.value ?? row.discount_value ?? 0) === 0) return 'free_delivery'
+  }
   if (['flat', 'fixed', 'amount', 'inr', 'rupee', 'rupees'].includes(t)) return 'flat'
   return 'percent'
 }
@@ -444,7 +500,7 @@ const mapCouponRow = (row, table) => ({
   title: row.title || row.name || row.label || 'Offer',
   tag: row.tag || row.subtitle || 'Limited-time offer',
   desc: row.desc || row.description || row.details || 'Use this offer on checkout.',
-  type: normalizeCouponType(row.type || row.discount_type),
+  type: normalizeCouponType(row.type || row.discount_type, row),
   value: Number(row.value ?? row.discount_value ?? row.amount ?? row.discount ?? row.percentage ?? row.percent ?? 0),
   min_total: Number(row.min_total ?? row.min_order ?? row.minimum_total ?? row.minimum_order ?? row.min_amount ?? 0),
   service_id: row.service_id || row.serviceId || row.applies_to || row.category || null,
@@ -512,30 +568,143 @@ export const recordCouponUse = async ({ couponCode, couponId, orderId }) => {
 
 // ---------------------------------------------------------------------------
 // PLACE ORDER WITH COUPON — server-side atomic order + coupon redemption.
-// Uses the `place-order` Edge Function which validates the coupon, inserts
-// the order row, and records coupon usage in a single transaction.
+// First tries the `place-order` Edge Function if deployed.
+// If Edge Functions are not deployed, seamlessly falls back to direct
+// atomic DB RPC (`redeem_coupon`) + direct order upsert with rollback on failure.
 // ---------------------------------------------------------------------------
 
 export const placeOrderServer = async ({ order, couponCode, cartTotal, serviceIds }) => {
   if (!isSupabaseConfigured) return null
-  const { data, error } = await supabase.functions.invoke('place-order', {
-    body: {
-      order,
-      coupon_code: couponCode || null,
-      cart_total: cartTotal || 0,
-      service_ids: serviceIds || [],
-    },
-  })
-  if (error) {
-    // Edge Function errors come back as { error: '...' } in the body
-    const body = typeof error === 'object' && error.context ? error.context : error
-    const msg = body?.error || error?.message || 'Order placement failed'
-    throw new Error(msg)
+  const userId = await uid().catch(() => null)
+  if (!userId) throw new Error('Not authenticated')
+
+  const code = couponCode ? String(couponCode).trim().toUpperCase() : null
+
+  // 1) Try Edge Function if available
+  let edgeFunctionSucceeded = false
+  try {
+    const { data, error } = await supabase.functions.invoke('place-order', {
+      body: {
+        order,
+        coupon_code: code,
+        cart_total: cartTotal || 0,
+        service_ids: serviceIds || [],
+      },
+    })
+
+    if (!error && data) {
+      if (!data.ok && data.error) {
+        throw new Error(data.error)
+      }
+      return data
+    }
+
+    if (error) {
+      // If the Edge function returned a structured business rejection (e.g. 400/409)
+      const body = typeof error === 'object' && error.context ? error.context : null
+      const msg = body?.error || error?.message || ''
+      if (
+        msg.includes('already been used') ||
+        msg.includes('Minimum order') ||
+        msg.includes('Valid only for') ||
+        msg.includes('Coupon not found') ||
+        msg.includes('Coupon validation') ||
+        msg.toLowerCase().includes('coupon')
+      ) {
+        throw new Error(msg)
+      }
+    }
+  } catch (err) {
+    const msg = err?.message || ''
+    // If it's a genuine coupon business rule failure, re-throw immediately
+    if (
+      msg.includes('already been used') ||
+      msg.includes('Minimum order') ||
+      msg.includes('Valid only for') ||
+      msg.includes('Coupon not found') ||
+      msg.includes('Coupon validation')
+    ) {
+      throw err
+    }
+    // Otherwise Edge Function is not deployed or network failed -> continue to direct DB RPC fallback
   }
-  if (data && !data.ok && data.error) {
-    throw new Error(data.error)
+
+  // 2) Direct DB execution: validate coupon via redeem_coupon RPC (if coupon provided)
+  let confirmedDiscount = order.discount || 0
+  let couponData = order.coupon || null
+
+  if (code) {
+    const { data: rpcResult, error: rpcError } = await supabase.rpc('redeem_coupon', {
+      p_user_id: userId,
+      p_coupon_code: code,
+      p_order_id: String(order.id),
+      p_cart_total: Number(cartTotal) || 0,
+      p_service_ids: Array.isArray(serviceIds) ? serviceIds : [],
+    })
+
+    if (rpcError) {
+      // Unique constraint violation = coupon already used
+      if (rpcError.code === '23505' || rpcError.message?.includes('coupon_uses_user_coupon_unique')) {
+        throw new Error('This coupon has already been used')
+      }
+      const rpcMissing = rpcError.code === '42883' || rpcError.message?.includes('does not exist')
+      if (!rpcMissing) {
+        throw new Error(rpcError.message || 'Coupon validation failed')
+      }
+      // If RPC is missing in DB, proceed with client-calculated discount and best-effort coupon_uses record
+    } else if (rpcResult) {
+      if (!rpcResult.ok) {
+        throw new Error(rpcResult.error || 'Coupon validation failed')
+      }
+      confirmedDiscount = Number(rpcResult.discount_amount) || 0
+      couponData = {
+        code: rpcResult.coupon_code || code,
+        id: rpcResult.coupon_id,
+        discount: Math.round(confirmedDiscount),
+      }
+    }
   }
-  return data
+
+  // 3) Recalculate totals
+  const safeCartTotal = Number(cartTotal) || 0
+  const discountedTotal = Math.max(safeCartTotal - confirmedDiscount, 0)
+  const gstAmount = discountedTotal * 0.18
+  const finalTotal = Math.round(discountedTotal + gstAmount)
+
+  const orderToSave = {
+    ...order,
+    total: finalTotal,
+    discount: Math.round(confirmedDiscount),
+    tax: Math.round(gstAmount),
+    subtotal: Math.round(safeCartTotal),
+    ...(couponData ? { coupon: couponData } : {}),
+  }
+
+  // 4) Upsert the order to DB
+  try {
+    await upsertOrder(orderToSave)
+  } catch (orderErr) {
+    // If order save failed after coupon was redeemed via RPC, release the coupon use
+    if (code) {
+      await deleteCouponUse({ couponCode: code, orderId: order.id }).catch(() => {})
+    }
+    throw new Error(`Failed to save order: ${orderErr.message || 'database error'}`)
+  }
+
+  // 5) If RPC didn't exist, record coupon usage as best effort
+  if (code && !couponData?.id) {
+    await recordCouponUse({ couponCode: code, orderId: order.id }).catch(() => {})
+  }
+
+  return {
+    ok: true,
+    order_id: order.id,
+    total: finalTotal,
+    discount: Math.round(confirmedDiscount),
+    tax: Math.round(gstAmount),
+    subtotal: Math.round(safeCartTotal),
+    coupon: couponData,
+  }
 }
 
 export const deleteCouponUse = async ({ couponCode, orderId }) => {

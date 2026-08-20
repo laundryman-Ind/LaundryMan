@@ -77,6 +77,7 @@ Deno.serve(async (req) => {
       'orders',         // contains the full order object in data
       'payments',       // saved payment instruments
       'addresses',      // saved delivery addresses
+      'carts',          // per-user shopping cart
     ]
 
     for (const table of userTables) {

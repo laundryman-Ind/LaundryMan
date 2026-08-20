@@ -304,6 +304,9 @@ const AppContent = () => {
               })
               login()
               setScreen('home')
+            } else if (authed) {
+              login()
+              setScreen('home')
             } else {
               // Session exists but no profile row — incomplete signup.
               setAuthNum(supUser.phone || '')
@@ -347,7 +350,7 @@ const AppContent = () => {
   }
 
   const handleNameDone = async (name) => {
-    updateUser({ name, phone: formatPhone(authNum) })
+    updateUser({ name, phone: formatPhone(authNum), photo: null })
     handleLogin()
     // Create the real profile row in the database, keyed by auth.uid()
     // (best effort — a missing table or offline state surfaces as a toast,
@@ -356,7 +359,7 @@ const AppContent = () => {
       if (isBetaAuth) {
         await setBetaProfileName(name)
       } else {
-        await upsertProfile({ name })
+        await upsertProfile({ name, photo: null })
       }
     } catch (e) {
       notify(e.message)

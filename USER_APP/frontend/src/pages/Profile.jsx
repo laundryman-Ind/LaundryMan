@@ -113,7 +113,7 @@ const Profile = ({ navigate, notify }) => {
 
       <div className="profile-head">
         <div className="profile-avatar">
-          {user.photo ? <img src={user.photo} alt={user.name} /> : user.name.charAt(0)}
+          {user?.photo ? <img src={user.photo} alt={user.name || 'User'} /> : ((user?.name || 'U').charAt(0))}
         </div>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div className="profile-name">{user.name}</div>
@@ -233,7 +233,7 @@ const Profile = ({ navigate, notify }) => {
 
             <div className="edit-avatar">
               <div className="profile-avatar">
-                {form.photo ? <img src={form.photo} alt="Profile preview" /> : form.name.charAt(0)}
+                {form.photo ? <img src={form.photo} alt="Profile preview" /> : ((form.name || 'U').charAt(0))}
               </div>
               <div className="photo-actions" style={{ width: '100%' }}>
                 <button

@@ -59,7 +59,7 @@ const Home = ({ navigate, notify }) => {
             </button>
           </div>
           <div className="greet-avatar">
-            {user.photo ? <img src={user.photo} alt={user.name} /> : user.name.charAt(0)}
+            {user?.photo ? <img src={user.photo} alt={user.name || 'User'} /> : ((user?.name || 'U').charAt(0))}
           </div>
         </div>
 

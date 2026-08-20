@@ -51,9 +51,9 @@ const Tracking = ({ navigate, params, notify }) => {
   const currentIdx = reachedIdx - 1
   const flow = cancelled ? STATUS_FLOW.slice(0, reachedIdx) : STATUS_FLOW
 
-  // Rider assigned to this order (mock). Live tracking / contact only make
+  // Rider assigned to this order. Live tracking / contact only make
   // sense while the order is on the move — hidden once delivered or cancelled.
-  const rider = order.rider || RIDER
+  const rider = order.riderId ? (order.rider || null) : null
 
   // Download the A4 invoice PDF (delivered orders only).
   // In the APK, the PDF is saved to Documents/LaundryMan/invoice.
@@ -176,7 +176,7 @@ const Tracking = ({ navigate, params, notify }) => {
       </div>
 
       {/* RIDER CONTACT & TIP */}
-      {!delivered && !cancelled && (
+      {!delivered && !cancelled && rider && (
         <div className="summary-card" style={{ marginBottom: 11 }}>
           <div className="spread">
             <div className="row">

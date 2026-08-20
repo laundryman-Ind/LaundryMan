@@ -18,7 +18,7 @@ let _sessionCreated = false
  * Returns true if a session was created, false if falling back to local-only.
  */
 export const createBetaSession = async (phoneNumber) => {
-  if (!isSupabaseConfigured || !isBetaAuth || !supabase) return false
+  if (!isSupabaseConfigured || !supabase) return false
   if (_sessionCreated) return true
 
   const phone = toPhone(phoneNumber)

@@ -9,7 +9,7 @@ import { listCoupons, listCouponUses } from '../services/api'
 const mockCouponSuggestions = [
   { id: 'FRESH20', code: 'FRESH20', title: 'Weekend special', tag: '20% off', desc: 'On dry cleaning orders.', type: 'percent', value: 20, min_total: 0, service_id: 'dry-clean', service_type: 'dry-clean', tone: '#C9821A' },
   { id: 'NEW50', code: 'NEW50', title: 'Welcome offer', tag: '50% off', desc: 'Up to ₹150 on first order.', type: 'percent', value: 50, min_total: 0, max_value: 150, tone: '#16279E' },
-  { id: 'FREEPICK', code: 'FREEPICK', title: 'Free pickup', tag: 'Free delivery', desc: 'On all orders above ₹499.', type: 'flat', value: 0, min_total: 499, tone: '#1F7A50' },
+  { id: 'FREEPICK', code: 'FREEPICK', title: 'Free pickup', tag: 'Free delivery', desc: 'On all orders above ₹499.', type: 'free_delivery', value: 0, min_total: 499, tone: '#1F7A50' },
 ]
 
 const Checkout = ({ navigate, notify, back }) => {
@@ -95,10 +95,15 @@ const Checkout = ({ navigate, notify, back }) => {
       if (!matches) return `Valid only for ${requiredService.replace(/-/g, ' ')} orders`
     }
 
-    // Value check
+    // Value check (Free delivery coupons have value: 0 which is valid)
     const t = String(coupon.type || '').toLowerCase().trim()
+    const isFreeDelivery = t === 'free_delivery' || t === 'delivery' || t === 'freepick' || t === 'pickup' ||
+      String(coupon.tag || '').toLowerCase().includes('free delivery') ||
+      String(coupon.title || '').toLowerCase().includes('free pick') ||
+      String(coupon.code || '').toUpperCase().includes('FREEPICK')
+
     const val = Number(coupon.value || 0)
-    if (val <= 0 && (t === 'percent' || t === 'percentage' || t === 'flat' || t === 'fixed')) {
+    if (!isFreeDelivery && val <= 0 && (t === 'percent' || t === 'percentage' || t === 'flat' || t === 'fixed')) {
       return 'This coupon has no discount value'
     }
 
@@ -341,9 +346,9 @@ const Checkout = ({ navigate, notify, back }) => {
 
         {couponError && <div style={{ fontSize: 12, color: '#e53e3e', padding: '4px 0 2px' }}>{couponError}</div>}
 
-        {selectedCoupon && discountAmount > 0 && (
+        {selectedCoupon && (
           <div style={{ fontSize: 13, color: 'var(--mint-deep, #1F7A50)', padding: '6px 0 2px', fontWeight: 600 }}>
-            ✓ {selectedCoupon.code} applied — {formatPrice(discountAmount)} off
+            ✓ {selectedCoupon.code} applied{discountAmount > 0 ? ` — ${formatPrice(discountAmount)} off` : ` — ${selectedCoupon.tag || 'Free delivery'}`}
           </div>
         )}
 

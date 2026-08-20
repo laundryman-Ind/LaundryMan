@@ -2,8 +2,10 @@ import React, { createContext, useContext, useState, useEffect, useMemo, useCall
 import { SERVICES as MOCK_SERVICES, SERVICE_ITEMS as MOCK_SERVICE_ITEMS, ITEM_INDEX, USER, IMG, RIDERS, ACTIVE_STATUSES, STATUS_LABELS, STATUS_NOTES } from '../data/mockData'
 import { supabase, isSupabaseConfigured, isBetaAuth } from '../services/supabase'
 import { createBetaSession, setBetaProfileName } from '../services/betaAuth'
+import { formatPhone } from '../services/phone'
 import {
   currentUser,
+  getProfile,
   listAddresses,
   upsertAddress,
   removeAddress as removeAddressApi,
@@ -52,7 +54,7 @@ export const AppProvider = ({ children }) => {
   const [authed, setAuthed] = useState(() => !!localStorage.getItem('lm2_logged_in'))
 
   // Signed-in user — editable and persisted
-  const [user, setUser] = useState(() => load('lm2_user', USER) || USER)
+  const [user, setUser] = useState(() => load('lm2_user', { name: '', phone: '', photo: null }) || { name: '', phone: '', photo: null })
 
   // Cart: { itemId: qty }
   const [cart, setCart] = useState(() => load('lm2_cart', {}) || {})
@@ -109,6 +111,34 @@ export const AppProvider = ({ children }) => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  const signout = useCallback(() => {
+    // Clear ALL app data from localStorage to prevent stale data
+    // from being re-uploaded when a different user logs in, or when
+    // the same user logs back in on a different device.
+    const keysToRemove = [
+      'lm2_logged_in', 'lm2_user', 'lm2_cart', 'lm2_item_photos',
+      'lm2_addresses_v2', 'lm2_addr_id_v2', 'lm2_pay_methods',
+      'lm2_pay_v2', 'lm2_orders_v3', 'lm2_used_coupons', 'lm2_migrated',
+    ]
+    keysToRemove.forEach((k) => {
+      try { localStorage.removeItem(k) } catch {}
+    })
+    try { localStorage.clear() } catch {}
+    setAuthed(false)
+    setUser({ name: '', phone: '', photo: null })
+    setAddresses([])
+    setSelectedAddressId('')
+    setOrders([])
+    setCart({})
+    setItemPhotos({})
+    setPayMethods([])
+    setPayMethod('cod')
+    // End the real Supabase session too (no-op when unconfigured)
+    if (supabase) {
+      supabase.auth.signOut().catch(() => {})
+    }
+  }, [])
+
   // Ensure a valid Supabase session exists (creates one in beta mode if needed).
   // Called before every DB operation so stale/expired tokens don't silently fail.
   const ensureSession = useCallback(async () => {
@@ -130,14 +160,27 @@ export const AppProvider = ({ children }) => {
   const _fetchAndMerge = useCallback(async () => {
     await ensureSession()
     const u = await currentUser().catch(() => null)
-    if (!u) return
+    if (!u) {
+      return
+    }
 
-    const hasMigrated = localStorage.getItem('lm2_migrated') === '1'
+    // Check if the user's profile exists in DB
+    let dbProfile = null
+    try {
+      dbProfile = await getProfile()
+    } catch {
+      dbProfile = null
+    }
 
-    // Track whether each fetch succeeded vs. failed (vs. returned empty).
-    // A failed fetch returns [] / {} as default, which looks identical to
-    // "genuinely empty" — we must distinguish the two to avoid uploading
-    // stale localStorage data when the DB is unreachable.
+    if (dbProfile) {
+      // Sync user state with database profile (name, phone, photo)
+      setUser({
+        name: dbProfile.name || '',
+        phone: dbProfile.phone ? formatPhone(dbProfile.phone) : (u.phone ? formatPhone(u.phone) : ''),
+        photo: dbProfile.photo || null,
+      })
+    }
+
     let addrsOk = false
     let ordersOk = false
     let cartOk = false
@@ -154,21 +197,9 @@ export const AppProvider = ({ children }) => {
     if (dbServices && dbServices.length) setServices(dbServices)
 
     // --- ADDRESSES: DB is authoritative ---
-    if (!hasMigrated && addrsOk && dbAddrs.length === 0) {
-      // One-time migration: DB is reachable AND genuinely empty.
-      // Push local addresses up to DB.
-      const localAddrs = load('lm2_addresses_v2', [])
-      if (Array.isArray(localAddrs) && localAddrs.length > 0) {
-        await Promise.all(localAddrs.map((a) => upsertAddress(a).catch(() => {})))
-        setAddresses(localAddrs)
-      } else {
-        setAddresses([])
-      }
-    } else if (addrsOk) {
-      // DB is reachable — DB wins unconditionally (even if empty)
+    if (addrsOk) {
       setAddresses(dbAddrs)
     }
-    // else: DB unreachable — keep current local state, do NOT restore from localStorage
 
     // --- ORDERS: DB is authoritative ---
     const dbOrders = dbAllOrders.filter((o) => !o?.hiddenAt)
@@ -181,64 +212,27 @@ export const AppProvider = ({ children }) => {
       return { ...o, review }
     })
 
-    if (!hasMigrated && ordersOk && dbAllOrders.length === 0) {
-      // One-time migration: DB reachable AND genuinely empty
-      const localOrders = load('lm2_orders_v3', [])
-      if (Array.isArray(localOrders) && localOrders.length > 0) {
-        const localWithReviews = localOrders.map((o) => ({
-          ...o,
-          review: reviewMap.get(o.id) || null,
-        }))
-        await Promise.all(localOrders.map((o) => upsertOrder(o).catch(() => {})))
-        setOrders(localWithReviews)
-      } else {
-        setOrders([])
-      }
-    } else if (ordersOk) {
-      // DB reachable — DB wins unconditionally
+    if (ordersOk) {
       setOrders(dbOrdersWithReviews)
     }
-    // else: DB unreachable — keep current local state
 
     // --- CART: DB is authoritative ---
-    try {
-      if (!hasMigrated && cartOk && (!dbCart || Object.keys(dbCart).length === 0)) {
-        const localCart = load('lm2_cart', {})
-        if (localCart && Object.keys(localCart).length > 0) {
-          await upsertCart(localCart).catch(() => {})
-          setCart(localCart)
-        } else {
-          setCart({})
-        }
-      } else if (cartOk) {
-        setCart(dbCart && Object.keys(dbCart).length > 0 ? dbCart : {})
-      }
-      // else: DB unreachable — keep current local cart state
-    } catch (e) {
-      console.warn('cart sync failed', e)
+    if (cartOk) {
+      setCart(dbCart && Object.keys(dbCart).length > 0 ? dbCart : {})
     }
 
     // --- PAYMENT METHODS: DB is authoritative ---
     try {
       const dbPayMethods = await listPaymentMethods().catch(() => null)
       if (dbPayMethods !== null) {
-        // DB reachable — DB wins
         setPayMethods(Array.isArray(dbPayMethods) ? dbPayMethods : [])
       }
     } catch (e) {
       console.warn('payment methods sync failed', e)
     }
+  }, [ensureSession, authed, signout])
 
-    // Mark migration as done — all future syncs treat DB as authoritative
-    if (!hasMigrated) {
-      localStorage.setItem('lm2_migrated', '1')
-    }
-  }, [ensureSession])
-
-  // When a Supabase session becomes active, load the user's addresses and
-  // orders from the database. If the DB has data it wins (source of truth);
-  // if the DB is empty but this device has local data, migrate it up once.
-  // In beta mode, the session is created via anonymous sign-in (betaAuth.js).
+  // When a Supabase session becomes active, load the user's data from the database.
   useEffect(() => {
     if (!authed || !isSupabaseConfigured) return
     let cancelled = false
@@ -250,32 +244,86 @@ export const AppProvider = ({ children }) => {
       }
     })()
     return () => { cancelled = true }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [authed])
+  }, [authed, _fetchAndMerge])
+
+  // Realtime cross-device sync: listen for profile deletion or updates across devices
+  useEffect(() => {
+    if (!authed || !isSupabaseConfigured) return
+    let channel = null
+    ;(async () => {
+      const u = await currentUser().catch(() => null)
+      if (!u?.id) return
+
+      channel = supabase
+        .channel(`user-sync-${u.id}`)
+        .on(
+          'postgres_changes',
+          { event: 'DELETE', schema: 'public', table: 'profiles', filter: `id=eq.${u.id}` },
+          () => {
+            console.warn('Profile delete event received — signing out')
+            signout()
+          }
+        )
+        .on(
+          'postgres_changes',
+          { event: 'UPDATE', schema: 'public', table: 'profiles', filter: `id=eq.${u.id}` },
+          (payload) => {
+            const newRow = payload?.new
+            if (newRow) {
+              setUser({
+                name: newRow.name || '',
+                phone: newRow.phone ? formatPhone(newRow.phone) : '',
+                photo: newRow.photo || null,
+              })
+            }
+          }
+        )
+        .on(
+          'broadcast',
+          { event: 'account_deleted' },
+          () => {
+            console.warn('Account deleted broadcast received — signing out')
+            signout()
+          }
+        )
+        .subscribe()
+    })()
+
+    return () => {
+      if (channel) supabase.removeChannel(channel)
+    }
+  }, [authed, signout])
+
+  // Multi-tab storage sync: when signed out on one tab, sign out on all tabs
+  useEffect(() => {
+    const onStorage = (e) => {
+      if (e.key === 'lm2_logged_in' && !e.newValue) {
+        signout()
+      }
+    }
+    window.addEventListener('storage', onStorage)
+    return () => window.removeEventListener('storage', onStorage)
+  }, [signout])
 
   // Cross-device sync: refresh data whenever the app returns to the foreground,
-  // PLUS a periodic 30-second poll while the app is visible.  This catches
-  // changes made on the web app, another mobile device, or by a rider/admin
-  // updating order status in a separate dashboard.
+  // PLUS a periodic 30-second poll while the app is visible.
   useEffect(() => {
     if (!authed || !isSupabaseConfigured) return
     let timer = null
     const onVisibility = () => {
       if (document.visibilityState === 'visible') {
         _fetchAndMerge().catch((e) => console.warn('visibility refresh failed', e))
-        // Restart the periodic timer when the app becomes visible
         clearInterval(timer)
         timer = setInterval(() => {
           if (document.visibilityState === 'visible') {
             _fetchAndMerge().catch((e) => console.warn('periodic refresh failed', e))
           }
-        }, 30000) // 30 seconds
+        }, 30000)
       } else {
         clearInterval(timer)
         timer = null
       }
     }
-    // Start the initial timer if already visible
     if (document.visibilityState === 'visible') {
       timer = setInterval(() => {
         if (document.visibilityState === 'visible') {
@@ -290,14 +338,18 @@ export const AppProvider = ({ children }) => {
     }
   }, [authed, _fetchAndMerge])
 
-  useEffect(() => save('lm2_user', user), [user])
-  useEffect(() => save('lm2_cart', cart), [cart])
-  useEffect(() => save('lm2_item_photos', itemPhotos), [itemPhotos])
-  useEffect(() => save('lm2_addresses_v2', addresses), [addresses])
-  useEffect(() => save('lm2_addr_id_v2', selectedAddressId), [selectedAddressId])
-  useEffect(() => save('lm2_pay_methods', payMethods), [payMethods])
-  useEffect(() => save('lm2_pay_v2', payMethod), [payMethod])
-  useEffect(() => save('lm2_orders_v3', orders), [orders])
+  useEffect(() => {
+    if (authed && user && (user.name || user.phone || user.photo)) {
+      save('lm2_user', user)
+    }
+  }, [user, authed])
+  useEffect(() => { if (authed) save('lm2_cart', cart) }, [cart, authed])
+  useEffect(() => { if (authed) save('lm2_item_photos', itemPhotos) }, [itemPhotos, authed])
+  useEffect(() => { if (authed) save('lm2_addresses_v2', addresses) }, [addresses, authed])
+  useEffect(() => { if (authed) save('lm2_addr_id_v2', selectedAddressId) }, [selectedAddressId, authed])
+  useEffect(() => { if (authed) save('lm2_pay_methods', payMethods) }, [payMethods, authed])
+  useEffect(() => { if (authed) save('lm2_pay_v2', payMethod) }, [payMethod, authed])
+  useEffect(() => { if (authed) save('lm2_orders_v3', orders) }, [orders, authed])
 
   // Persist cart to the database when authenticated and Supabase is configured.
   useEffect(() => {
@@ -447,15 +499,15 @@ export const AppProvider = ({ children }) => {
       total,
       address,
       payment,
-      rider: RIDERS[Math.floor(Math.random() * RIDERS.length)],
+      rider: null,
       createdAt: 'Just now',
       placedAt: Date.now(),
       review: null,
       timeline: [{ step: 'placed', time: 'Just now', note: 'Order confirmed' }],
     }
 
-    // Server-side placement: if a coupon is attached, use the Edge Function
-    // for atomic validation + order creation. Otherwise, direct upsert.
+    // Server-side placement: if a coupon is attached, handles atomic validation +
+    // order creation. Otherwise, direct upsert.
     // CRITICAL: only add to local state AFTER the DB write succeeds.
     let dbConfirmed = false
     await ensureSession()
@@ -472,34 +524,14 @@ export const AppProvider = ({ children }) => {
         order.total = serverResult.total ?? order.total
         order.discount = serverResult.discount ?? order.discount
         order.tax = serverResult.tax ?? order.tax
+        if (serverResult.coupon) {
+          order.coupon = serverResult.coupon
+        }
       }
       dbConfirmed = true
     } catch (e) {
-      // Coupon errors MUST stop the order — the Edge Function may have
-      // already created a coupon_uses row that the error response signals.
-      if (e.message && (
-        e.message.includes('coupon') ||
-        e.message.includes('already been used') ||
-        e.message.includes('Minimum order') ||
-        e.message.includes('Coupon')
-      )) {
-        throw e  // coupon errors must stop the order
-      }
-      // Non-coupon error (e.g. edge function not deployed) — fall back
-      // to direct upsert, but only for non-coupon orders. For coupon
-      // orders the Edge Function may have partially succeeded (coupon_uses
-      // created), so falling back would create an inconsistent state.
-      if (couponCode) {
-        throw new Error('Order placement failed. Please try again.')
-      }
-      console.warn('Server placement failed, falling back to direct upsert', e)
-      try {
-        await upsertOrder(order)
-        dbConfirmed = true
-      } catch (e2) {
-        console.warn('order save failed', e2)
-        throw new Error('Could not save order. Please try again.')
-      }
+      console.warn('Order placement failed on server:', e)
+      throw e
     }
 
     // Only add to local state and clear cart after DB confirms success.
@@ -669,7 +701,7 @@ export const AppProvider = ({ children }) => {
   // NOTE: This should only be used for non-authed (offline) mode. When the
   // database is available, DB is always the source of truth.
   const reloadFromStorage = useCallback(() => {
-    setUser(load('lm2_user', USER) || USER)
+    setUser(load('lm2_user', { name: '', phone: '', photo: null }) || { name: '', phone: '', photo: null })
     setCart(load('lm2_cart', {}) || {})
     setItemPhotos(load('lm2_item_photos', {}) || {})
     const addrs = load('lm2_addresses_v2', [])
@@ -712,28 +744,6 @@ export const AppProvider = ({ children }) => {
       const phone = user?.phone || ''
       if (phone) createBetaSession(phone).catch(() => {})
     }
-  }
-
-  const signout = () => {
-    // Clear ALL app data from localStorage to prevent stale data
-    // from being re-uploaded when a different user logs in, or when
-    // the same user logs back in on a different device.
-    const keysToRemove = [
-      'lm2_logged_in', 'lm2_user', 'lm2_cart', 'lm2_item_photos',
-      'lm2_addresses_v2', 'lm2_addr_id_v2', 'lm2_pay_methods',
-      'lm2_pay_v2', 'lm2_orders_v3', 'lm2_used_coupons', 'lm2_migrated',
-    ]
-    keysToRemove.forEach((k) => localStorage.removeItem(k))
-    setAuthed(false)
-    setAddresses([])
-    setSelectedAddressId('')
-    setOrders([])
-    setCart({})
-    setItemPhotos({})
-    setPayMethods([])
-    setPayMethod('cod')
-    // End the real Supabase session too (no-op when unconfigured)
-    if (supabase) supabase.auth.signOut()
   }
 
   const value = {
